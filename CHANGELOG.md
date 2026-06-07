@@ -4,6 +4,14 @@ Newest first. Timestamps are local (America/New_York). Kept per drlor's request 
 timestamp work for velocity tracking without losing quality.
 
 ## 2026-06-07
+- **18:11 EDT** — PLAYABILITY + PUBLISH (solo). PACE: 1× was 30 ticks/sec (frantic) → now 6/sec (calm,
+  Civ-watchable), speeds 1–5× = 6–30/sec. ARMY COMMAND: nations set a war-rally; soldiers (warrior/ranger)
+  march to it while civilians stay home; player "⚔ Army" button → click to march; AI marches to the enemy
+  capital when winning, recalls on peace; pulsing march marker. TERRITORY rewritten: borders are PERSISTENT
+  and EXPAND outward from fixed cities (no more "moving"), GOLD funds faster claims, and an overwhelming
+  besieger CONQUERS a city (its land + 40% stockpile/gold transfer). Treasury (gold) income per year.
+  Regression ALL PASS (gen 23). PUBLISHED: public repo github.com/lordbasilaiassistant-sudo/aeon (MIT) +
+  GitHub Pages → lordbasilaiassistant-sudo.github.io/aeon (zero-install play). README/LICENSE added.
 - **17:51 EDT** — VEHICLES & TRAVEL (solo) — water/air travel is EARNED. A seafaring people (Sailing tech
   + wood + a coastal town) launches BOATS crewed by shoreline folk; Flight + metal builds PLANES (cross
   any terrain, fast). On foot you stay land-locked; a boat crosses water, a plane crosses anything. Verified
