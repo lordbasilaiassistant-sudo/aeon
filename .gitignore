@@ -6,3 +6,5 @@ Thumbs.db
 # editor / OS cruft
 .vscode/
 .idea/
+# scratch workflow scripts (not part of the game)
+test/_wf_*.js
