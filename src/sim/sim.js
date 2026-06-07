@@ -317,6 +317,19 @@ export class Sim {
       }
       this.governance.checkDestinies(this); // one-time toast when a nation fulfils its destiny
       this.assignRoles();                   // size each nation's army from its militarism
+      // CITY PRODUCTION FOCUS — each city does what the player/AI set it to do
+      for (let si = 0; si < this.settlements.length; si++) {
+        const s = this.settlements[si];
+        const tr = this.tribes.get(s.tribeId);
+        if (!tr || tr.members === 0) continue;
+        switch (s.focus) {
+          case 'gold': tr.gold += 3; break;
+          case 'research': tr.tech.points += 4; break;
+          case 'growth': this.world.blessFood(s.x, s.y, 6); break;
+          case 'build': if (tr.stock.stone >= 2) { tr.stock.stone -= 2; s.defense = Math.min(50, (s.defense || 0) + 3); } break;
+          case 'military': this.trainSoldier(s, tr); break;
+        }
+      }
     }
   }
 
@@ -686,6 +699,18 @@ export class Sim {
       const draw = hash2(a.id, 7, yr) - (prop - 0.5) * 0.35;  // martial individuals more likely fighters
       if (draw < fW) a.role = (a.vision > 4.3 && a.size < 1.2) ? 2 : 1; // keen & light → ranger, else warrior
       else a.role = 0;
+    }
+  }
+
+  // 'military' city focus: arm a nearby civilian into a warrior each year (costs gold).
+  trainSoldier(s, tr) {
+    if (tr.gold < 2) return;
+    const A = this.pool.agents, rr = (s.radius + 5) * (s.radius + 5);
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i];
+      if (!a.alive || a.tribeId !== s.tribeId || a.role !== 0) continue;
+      const dx = a.x - s.x, dy = a.y - s.y;
+      if (dx * dx + dy * dy < rr) { a.role = 1; tr.gold -= 2; return; }
     }
   }
 

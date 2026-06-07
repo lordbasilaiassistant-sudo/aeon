@@ -63,7 +63,7 @@ export class Territory {
       if (!s._atk) continue;
       let best = 0, bestId = 0;
       for (const [tid, f] of s._atk) if (f > best) { best = f; bestId = tid; }
-      const defense = (s._def || 0) + s.tier * 6 + 4; // walls & tier help defenders hold
+      const defense = (s._def || 0) + s.tier * 6 + 4 + (s.defense || 0); // soldiers + tier + built walls
       if (bestId && best > defense * 1.4) {
         const newTr = live.get(bestId), oldTr = live.get(s.tribeId);
         if (newTr) {

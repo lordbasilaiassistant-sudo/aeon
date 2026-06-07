@@ -341,12 +341,23 @@ export class UI {
       <div class="vrow"><span>population</span><span>${tr ? tr.members : '—'}</span></div>
       <div class="trait-head">structures</div>
       <div class="settle-blds">${esc(bldList)}</div>
+      ${mine ? `<div class="trait-head">city focus — <b>${esc(s.focus || 'growth')}</b>${s.defense ? ' · walls ' + (s.defense | 0) : ''}</div>
+      <div class="insp-diplo">
+        <button class="fbtn" data-f="growth" title="Grow population">🌱</button>
+        <button class="fbtn" data-f="build" title="Build walls / defense">🏛</button>
+        <button class="fbtn" data-f="military" title="Train soldiers">⚔</button>
+        <button class="fbtn" data-f="gold" title="Generate gold">🪙</button>
+        <button class="fbtn" data-f="research" title="Focus research">🔬</button>
+      </div>` : ''}
       <div class="insp-actions">
         ${tr ? (mine
           ? `<button id="act-focus">⚑ Lead your nation</button>`
           : (me ? `<button id="act-war2" class="dbtn war">⚔ War on ${esc(tr.name)}</button>` : `<button id="act-playas3">⚑ Play as ${esc(tr.name)}</button>`)) : ''}
       </div>`;
     const f = $('act-focus'); if (f) f.onclick = () => { game.cam.setTarget(s.x, s.y, Math.max(game.cam.zoom, 9)); this.setNationTab('policies'); };
+    this.el.inspBody.querySelectorAll('.fbtn').forEach((b) => {
+      b.onclick = () => { s.focus = b.dataset.f; this.renderSettlement(s, tr, game); this.toast({ type: 'info', msg: `${s.name || 'City'}: ${s.focus} focus` }); };
+    });
     const pa = $('act-playas3'); if (pa) pa.onclick = () => game.playAsTribe(tr);
     const w = $('act-war2'); if (w) w.onclick = () => { const g = this._gov('declareWar'); if (g && me && tr) g.declareWar(this._sim(), me, tr); };
   }

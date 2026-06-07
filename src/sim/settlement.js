@@ -82,6 +82,8 @@ export class Settlement {
     this.radius = 1;          // footprint radius in tiles (render hint)
     this.foundedYear = 0;
     this.starve = 0;          // years below ABANDON_MIN
+    this.focus = 'growth';    // player/AI city production: growth|build|military|gold|research
+    this.defense = 0;         // fortification (build focus) — helps hold the city vs conquest
     // per-year accumulators (filled during the agent scan, then consumed)
     this._pop = 0; this._sx = 0; this._sy = 0;
     // building-layout cache keys (rebuild only when one of these changes)
