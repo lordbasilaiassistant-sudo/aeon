@@ -30,7 +30,9 @@ export class Game {
     this.selection = null;        // {agent} | {tribe}
     this.playerTribe = null;
     this.possessed = null;
-    this.armyMode = false;        // when true, the next map click marches the army
+    this.commandMode = false;     // RTS command: drag-select your units, click to order them
+    this.selected = [];           // hand-selected units (your soldiers)
+    this.selBox = null;           // live selection rectangle (world coords) for the renderer
     this.keys = new Set();
     this.acc = 0;                 // sim-step accumulator
 
@@ -84,11 +86,7 @@ export class Game {
 
   // ---------------------------------------------------------------- tools
   applyTool(wx, wy, dragging) {
-    // army command takes priority: a click marches your soldiers to that spot
-    if (this.armyMode && !dragging) {
-      this.setArmyTarget(Math.max(0, Math.min(this.world.w - 1, wx)), Math.max(0, Math.min(this.world.h - 1, wy)));
-      return;
-    }
+    // (RTS command mode — drag-select & order — is handled in input.js, not here)
     // Survival forbids the divine hand; only inspect/possess act.
     if (this.gameMode === 'survival' && GOD_TOOLS.has(this.tool)) return;
     const W = this.world, S = this.sim, fx = this.fx;
@@ -191,20 +189,48 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- army command
+  // toggle RTS command mode: drag a box to select your soldiers, click to order them
   musterArmy() {
-    if (!this.playerTribe) return;
-    this.armyMode = true;
-    this.ui.toast({ type: 'info', msg: '⚔ Click the map to march your army there.' });
+    if (!this.playerTribe) { this.ui.toast({ type: 'info', msg: 'Lead a nation first to command its army.' }); return; }
+    this.commandMode = !this.commandMode;
+    if (!this.commandMode) { this.selected = []; this.selBox = null; }
+    this.ui.toast({ type: 'info', msg: this.commandMode ? '⚔ Command mode: drag to select your soldiers, click to send them.' : 'Command mode off.' });
   }
-  setArmyTarget(wx, wy) {
-    this.armyMode = false;
+
+  // select your own units inside a world-space rectangle (prefers soldiers)
+  boxSelect(x0, y0, x1, y1) {
     if (!this.playerTribe) return;
-    this.gov.marchArmy(this.sim, this.playerTribe, wx, wy);
-    this.fx.ring(wx, wy, '#ff7755', 6, 28);
-    this.fx.text(wx, wy, '⚔ march', '#ff9a7a');
-    this.ui.toast({ type: 'info', msg: `${this.playerTribe.name}'s soldiers march out.` });
+    const lo = { x: Math.min(x0, x1), y: Math.min(y0, y1) }, hi = { x: Math.max(x0, x1), y: Math.max(y0, y1) };
+    const A = this.sim.pool.agents, pick = [];
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i];
+      if (!a.alive || a.tribeId !== this.playerTribe.id) continue;
+      if (a.x >= lo.x && a.x <= hi.x && a.y >= lo.y && a.y <= hi.y) pick.push(a);
+    }
+    // if any soldiers are in the box, command just the soldiers; else everyone caught
+    const soldiers = pick.filter((a) => a.role === 1 || a.role === 2);
+    this.selected = soldiers.length ? soldiers : pick;
+    this.ui.toast({ type: 'info', msg: `${this.selected.length} units selected — click to move/attack.` });
   }
-  recallArmy() { if (this.playerTribe) this.gov.marchArmy(this.sim, this.playerTribe, null); }
+
+  // order selected units to a spot; clicking enemy land marches them in AND declares war
+  issueOrder(wx, wy) {
+    if (!this.selected.length) return;
+    for (let i = 0; i < this.selected.length; i++) {
+      const a = this.selected[i];
+      if (a.alive) { a.ordered = true; a.ordX = wx; a.ordY = wy; }
+    }
+    const ownerId = this.sim.territory ? this.sim.territory.ownerAt(wx, wy) : 0;
+    let attack = false;
+    if (ownerId && this.playerTribe && ownerId !== this.playerTribe.id) {
+      const foe = this.sim.tribes.get(ownerId);
+      if (foe && !this.sim.diplomacy.atWar(this.sim, this.playerTribe.id, ownerId)) {
+        this.gov.declareWar(this.sim, this.playerTribe, foe); attack = true;
+      } else if (foe) attack = true;
+    }
+    this.fx.ring(wx, wy, attack ? '#ff5a44' : '#6ea8ff', 6, 26);
+    this.fx.text(wx, wy, attack ? '⚔ attack' : '→ move', attack ? '#ff8a72' : '#9cc4ff');
+  }
 
   // ---------------------------------------------------------------- possess
   tryPossess(wx, wy) {
@@ -267,8 +293,10 @@ export class Game {
       this.ascend();
     }
 
-    // surface the army's march target to the renderer (a marker on the map)
+    // surface the army's march target + live selection to the renderer
     this.renderer.armyTarget = this.playerTribe ? this.playerTribe.warRally : null;
+    this.renderer.selected = this.commandMode ? this.selected : null;
+    this.renderer.selBox = this.selBox;
 
     this.cam.update();
     this.fx.update();

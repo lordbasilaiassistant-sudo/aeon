@@ -27,6 +27,7 @@ export class Agent {
     this.carryType = -1; this.carryAmt = 0; // resource being hauled home (-1 = none)
     this.hydration = 1;                     // thirst need (0..1)
     this.vehicle = 0;                       // 0 none · 1 boat (crosses water) · 2 plane (crosses any)
+    this.ordX = 0; this.ordY = 0; this.ordered = false; // player move/attack order (RTS command)
     // cached expressed traits
     this.size = 1; this.speed = 1; this.metabolism = 1; this.fertility = 1;
     this.aggression = 0.5; this.vision = 4; this.diet = 0; this.resilience = 0.5;
@@ -48,6 +49,7 @@ export class Agent {
     this.stamina = 1;       // combat/work fatigue (0..1); rest to recover
     this.hydration = 1;     // thirst need (0..1); drink at water or die
     this.vehicle = 0;       // crafted craft: 0 none, 1 boat, 2 plane
+    this.ordered = false; this.ordX = 0; this.ordY = 0; // direct player order
     this.carryType = -1; this.carryAmt = 0;
     this.expressTraits();
     this.energy = 0.6;

@@ -64,6 +64,7 @@ export class Renderer {
     Visuals.drawAgents(this.ctx, this.cam, this.sim);
     this.drawSelection();
     this.drawArmyTarget();
+    this.drawCommand();
     this.drawGhost();
     this.drawFX();
     Visuals.drawClouds(this.ctx, this.cam, this.sim);   // drifting atmosphere over the world
@@ -180,6 +181,33 @@ export class Renderer {
       const r = Math.max(14, Math.sqrt(tr.members) * cam.zoom * 0.7);
       ctx.strokeStyle = `hsl(${tr.hue},80%,70%)`; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke();
+    }
+  }
+
+  // RTS command: highlight selected units + draw the live drag-selection box
+  drawCommand() {
+    const ctx = this.ctx, cam = this.cam;
+    const sel = this.selected;
+    if (sel && sel.length) {
+      ctx.strokeStyle = '#9cff7a'; ctx.lineWidth = 1.5;
+      const r = Math.max(3, cam.zoom * 0.4);
+      for (let i = 0; i < sel.length; i++) {
+        const a = sel[i]; if (!a.alive) continue;
+        const p = cam.worldToScreen(a.x, a.y);
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke();
+        if (a.ordered) { // a faint line to its order point
+          const o = cam.worldToScreen(a.ordX, a.ordY);
+          ctx.globalAlpha = 0.25; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(o.x, o.y); ctx.stroke(); ctx.globalAlpha = 1;
+        }
+      }
+    }
+    const b = this.selBox;
+    if (b) {
+      const p0 = cam.worldToScreen(b.x0, b.y0), p1 = cam.worldToScreen(b.x1, b.y1);
+      const x = Math.min(p0.x, p1.x), y = Math.min(p0.y, p1.y);
+      ctx.strokeStyle = 'rgba(156,255,122,0.9)'; ctx.fillStyle = 'rgba(156,255,122,0.12)'; ctx.lineWidth = 1.5;
+      ctx.fillRect(x, y, Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y));
+      ctx.strokeRect(x, y, Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y));
     }
   }
 

@@ -459,15 +459,23 @@ export class Sim {
         mx += (rdx / rd) * pull; my += (rdy / rd) * pull;
       }
     }
+    // DIRECT ORDER: a unit the player hand-selected and sent somewhere overrides its
+    // brain's wandering and marches to the spot (RTS command). Cleared on arrival.
+    if (a.ordered && a !== this.controlled) {
+      const odx = a.ordX - a.x, ody = a.ordY - a.y;
+      const od = Math.hypot(odx, ody);
+      if (od < 1.6) { a.ordered = false; }
+      else { mx = (odx / od) * 1.4; my = (ody / od) * 1.4; } // hard override — it obeys
+    }
     // ARMY COMMAND: soldiers (warriors/rangers) march to the war-rally the player or
     // AI set — this is how you direct your military toward a front / a rival's city.
-    if (tr && tr.warRally && (a.role === 1 || a.role === 2) && a !== this.controlled) {
+    else if (tr && tr.warRally && (a.role === 1 || a.role === 2) && a !== this.controlled) {
       const rdx = tr.warRally.x - a.x, rdy = tr.warRally.y - a.y;
       const rd = Math.hypot(rdx, rdy);
       if (rd > 1.5) { mx += (rdx / rd) * 0.95; my += (rdy / rd) * 0.95; } // strong: the army obeys
     }
     const mlen = Math.hypot(mx, my) || 1;
-    const sp = a.speed * 0.16 * (tr ? tr.caps.moveMul : 1) * (a.vehicle === 2 ? 2.2 : a.vehicle === 1 ? 1.1 : 1); // horses/wheel + craft speed
+    const sp = a.speed * 0.16 * (tr ? tr.caps.moveMul : 1) * (a.vehicle === 2 ? 2.2 : a.vehicle === 1 ? 1.1 : 1) * (a.ordered ? 2.1 : 1); // +craft +commanded-march speed
     mx = (mx / mlen) * sp; my = (my / mlen) * sp;
     a.vx = a.vx * 0.6 + mx * 0.4;
     a.vy = a.vy * 0.6 + my * 0.4;

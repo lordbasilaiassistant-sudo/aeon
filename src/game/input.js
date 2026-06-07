@@ -7,8 +7,9 @@ const TOOL_KEYS = {
 export function bindInput(game) {
   const canvas = game.canvas;
   const cam = game.cam;
-  let dragging = false, panning = false;
+  let dragging = false, panning = false, selecting = false;
   let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = 0;
+  let selStart = null;
   const pointers = new Map();
   let pinchDist = 0;
 
@@ -26,7 +27,13 @@ export function bindInput(game) {
       return;
     }
     lastX = downX = e.clientX; lastY = downY = e.clientY; moved = 0;
-    if (e.button === 2 || e.button === 1 || (isPanTool() && !e.shiftKey)) {
+    // RTS command mode: left button drags a selection box / clicks an order. Right
+    // button still pans so you can reposition while commanding.
+    if (game.commandMode && e.button === 0) {
+      selecting = true;
+      selStart = cam.screenToWorld(e.clientX, e.clientY);
+      game.selBox = { x0: selStart.x, y0: selStart.y, x1: selStart.x, y1: selStart.y };
+    } else if (e.button === 2 || e.button === 1 || (isPanTool() && !e.shiftKey)) {
       panning = true;
     } else {
       dragging = true;
@@ -60,7 +67,9 @@ export function bindInput(game) {
     moved += Math.abs(dx) + Math.abs(dy);
     lastX = e.clientX; lastY = e.clientY;
 
-    if (panning) {
+    if (selecting && selStart) {
+      game.selBox = { x0: selStart.x, y0: selStart.y, x1: w.x, y1: w.y };
+    } else if (panning) {
       cam.panBy(dx, dy);
     } else if (dragging) {
       game.applyTool(w.x, w.y, true);
@@ -70,7 +79,12 @@ export function bindInput(game) {
   const endPointer = (e) => {
     if (pointers.size <= 2) pinchDist = 0;
     pointers.delete(e.pointerId);
-    if (dragging && moved < 5) {
+    if (selecting) {
+      const up = cam.screenToWorld(e.clientX, e.clientY);
+      if (moved < 6) game.issueOrder(up.x, up.y);          // a click = order selected units
+      else game.boxSelect(selStart.x, selStart.y, up.x, up.y); // a drag = select your units
+      game.selBox = null; selStart = null; selecting = false;
+    } else if (dragging && moved < 5) {
       const w = cam.screenToWorld(downX, downY);
       game.applyTool(w.x, w.y, false); // treat as click
     }
