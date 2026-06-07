@@ -71,6 +71,7 @@ export class UI {
     $('insp-close').onclick = () => this.hideInspector();
     $('nation-leave').onclick = () => this.game && this.game.ascend();
     if ($('nation-army')) $('nation-army').onclick = () => this.game && this.game.musterArmy();
+    if ($('nation-found')) $('nation-found').onclick = () => this.game && this.game.foundCity();
 
     // ---- god tools: build labels, wire click + hover tooltip ----
     this._buildTooltip();

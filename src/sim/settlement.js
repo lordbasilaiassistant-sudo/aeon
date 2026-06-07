@@ -107,6 +107,54 @@ export class SettlementSystem {
     return this._list || (this.sim ? this.sim.settlements : []);
   }
 
+  // Found a city on command (player/AI "settler"): a permanent settlement at (x,y)
+  // if it's land and not on top of another town. Returns the Settlement or null.
+  foundAt(sim, tribeId, x, y) {
+    const W = sim.world;
+    const ix = x | 0, iy = y | 0;
+    if (!W.walkable(ix, iy)) return null;
+    if (!sim.settlements) sim.settlements = [];
+    for (let i = 0; i < sim.settlements.length; i++) {
+      const s = sim.settlements[i];
+      const dx = s.x - x, dy = s.y - y;
+      if (dx * dx + dy * dy < 64) return null;        // too close to an existing town
+    }
+    const tr = sim.tribes.get(tribeId);
+    const s = new Settlement(_nextSettlementId++, tribeId, ix + 0.5, iy + 0.5);
+    s.foundedYear = sim.year ? sim.year() : 0;
+    if (tr) { s.hue = tr.hue; s.era = eraOf(tr); }
+    // a SETTLER PARTY — relocate some of the nation's people to populate the new
+    // city (so it has real residents and doesn't instantly starve & vanish).
+    let moved = 0;
+    const A = sim.pool.agents;
+    for (let i = 0; i < A.length && moved < 14; i++) {
+      const a = A[i];
+      if (!a.alive || a.tribeId !== tribeId) continue;
+      a.x = ix + 0.5 + (moved % 4) - 1.5;
+      a.y = iy + 0.5 + (((moved / 4) | 0) - 1.5);
+      a.ordered = false; a.rally = null;
+      moved++;
+    }
+    s.pop = moved;
+    s.focus = 'growth';      // a new colony prioritises growing
+    s.permanent = true;      // a founded city does not get abandoned (Civ cities persist)
+    // make the site a FOOD MAGNET so people stay & breed here (the reason to settle):
+    // tilled, fertile land + a stock of food right now.
+    const R = 6;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const tx = ix + dx, ty = iy + dy;
+      if (!W.inBounds(tx, ty) || W.isWater(tx, ty)) continue;
+      if (dx * dx + dy * dy > R * R) continue;
+      const k = W.idx(tx, ty);
+      if (W.fert[k] > 0 && W.fert[k] < 1.2) W.fert[k] = Math.min(1.3, W.fert[k] + 0.5);
+      W.food[k] = W.fert[k];
+    }
+    this._grow(sim, s, s.era);
+    sim.settlements.push(s);
+    if (sim.emit && tr) sim.emit('settle', `${s.name} is founded by ${tr.name}`, s.x, s.y, tr.hue);
+    return s;
+  }
+
   // settlements registered for a tribe (read by Tech / sim for bonuses)
   countOf(tribeId) {
     const a = this.byTribe.get(tribeId);
@@ -271,7 +319,7 @@ export class SettlementSystem {
       const s = list[r];
       const tribe = sim.tribes.get(s.tribeId);
       const gone = !tribe || tribe.members === 0;
-      if (gone || s.starve > MAX_STARVE) {
+      if (gone || (s.starve > MAX_STARVE && !s.permanent)) {
         sim.emit('abandon', `${s.name} lies abandoned`, s.x, s.y, s.hue);
         continue; // drop
       }

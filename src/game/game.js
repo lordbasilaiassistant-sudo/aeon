@@ -33,6 +33,7 @@ export class Game {
     this.commandMode = false;     // RTS command: drag-select your units, click to order them
     this.selected = [];           // hand-selected units (your soldiers)
     this.selBox = null;           // live selection rectangle (world coords) for the renderer
+    this.foundMode = false;       // when true, the next click founds a new city
     this.keys = new Set();
     this.acc = 0;                 // sim-step accumulator
 
@@ -86,6 +87,8 @@ export class Game {
 
   // ---------------------------------------------------------------- tools
   applyTool(wx, wy, dragging) {
+    // found-city mode: the next click plants a new city
+    if (this.foundMode && !dragging) { this.foundCityAt(wx, wy); return; }
     // (RTS command mode — drag-select & order — is handled in input.js, not here)
     // Survival forbids the divine hand; only inspect/possess act.
     if (this.gameMode === 'survival' && GOD_TOOLS.has(this.tool)) return;
@@ -243,6 +246,26 @@ export class Game {
     }
     this.fx.ring(wx, wy, attack ? '#ff5a44' : '#6ea8ff', 6, 26);
     this.fx.text(wx, wy, attack ? '⚔ attack' : '→ move', attack ? '#ff8a72' : '#9cc4ff');
+  }
+
+  // ---------------------------------------------------------------- found city
+  foundCity() {
+    if (!this.playerTribe) { this.ui.toast({ type: 'info', msg: 'Lead a nation first.' }); return; }
+    if (this.playerTribe.gold < 10) { this.ui.toast({ type: 'extinct', msg: 'Need 10 gold to found a city.' }); return; }
+    this.foundMode = true;
+    this.ui.toast({ type: 'info', msg: '🏛 Click fertile land to found a city (10 gold).' });
+  }
+  foundCityAt(wx, wy) {
+    this.foundMode = false;
+    if (!this.playerTribe || this.playerTribe.gold < 10) return;
+    const s = this.sim.settleSys.foundAt(this.sim, this.playerTribe.id, wx, wy);
+    if (s) {
+      this.playerTribe.gold -= 10;
+      this.fx.ring(s.x, s.y, `hsl(${this.playerTribe.hue},80%,65%)`, 6, 28);
+      this.fx.text(s.x, s.y, '🏛 ' + s.name, '#cfe');
+    } else {
+      this.ui.toast({ type: 'extinct', msg: "Can't found here — needs land, clear of other cities." });
+    }
   }
 
   // ---------------------------------------------------------------- possess
