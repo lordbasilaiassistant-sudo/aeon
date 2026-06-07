@@ -75,7 +75,10 @@ export class Game {
     this.tool = 'inspect'; this.ui.setActiveTool('inspect');
     this.speedIdx = 1; this.ui.setSpeed(this.speed);
     this.playAsTribe(tribe);
-    this.cam.setTarget(tribe.capitalX, tribe.capitalY, 10);
+    // SNAP the camera onto the homeland immediately (no fly-in from the corner)
+    this.cam.x = this.cam.tx = tribe.capitalX;
+    this.cam.y = this.cam.ty = tribe.capitalY;
+    this.cam.zoom = this.cam.tzoom = 11;
     return tribe;
   }
 

@@ -168,6 +168,8 @@ export class Sim {
     if (name && name.trim()) tribe.name = name.trim();
     tribe.foundedYear = this.year();
     tribe.isHomeland = true;
+    tribe.capitalX = spot.x; tribe.capitalY = spot.y; // anchor capital to the homeland NOW
+    this.startSpot = { x: spot.x, y: spot.y };          // so the camera can center on it at launch
     this.tribes.set(tribe.id, tribe);
     this.tech.initTribe(tribe); this.civics.initTribe(tribe); this.anthro.initTribe(tribe);
     this.culture.initTribe(tribe, this.rng);
