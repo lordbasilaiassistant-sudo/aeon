@@ -17,6 +17,20 @@ export function bindInput(game) {
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // minimap: click/drag to jump the camera across the world (Civ-style)
+  const mini = document.getElementById('minimap');
+  if (mini) {
+    let miniDrag = false;
+    const jump = (e) => {
+      const r = mini.getBoundingClientRect();
+      const w = game.renderer.miniToWorld(e.clientX - r.left, e.clientY - r.top);
+      game.cam.setTarget(w.x, w.y, game.cam.zoom);
+    };
+    mini.addEventListener('pointerdown', (e) => { miniDrag = true; mini.setPointerCapture(e.pointerId); jump(e); e.stopPropagation(); });
+    mini.addEventListener('pointermove', (e) => { if (miniDrag) jump(e); });
+    mini.addEventListener('pointerup', (e) => { miniDrag = false; });
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -109,7 +123,8 @@ export function bindInput(game) {
     if (k === '[') { game.brush = Math.max(1, game.brush - 1); return; }
     if (k === ']') { game.brush = Math.min(20, game.brush + 1); return; }
     if (k === 'escape') {
-      if (game.possessed) game.releasePossession();
+      if (game.commandMode) { game.commandMode = false; game.selected = []; game.selBox = null; if (game.ui.setCommandBanner) game.ui.setCommandBanner(false); }
+      else if (game.possessed) game.releasePossession();
       else if (game.mode === 'nation') game.ascend();
       else { game.selection = null; game.renderer.selection = null; game.ui.hideInspector(); }
     }

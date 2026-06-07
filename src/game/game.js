@@ -193,8 +193,21 @@ export class Game {
   musterArmy() {
     if (!this.playerTribe) { this.ui.toast({ type: 'info', msg: 'Lead a nation first to command its army.' }); return; }
     this.commandMode = !this.commandMode;
-    if (!this.commandMode) { this.selected = []; this.selBox = null; }
-    this.ui.toast({ type: 'info', msg: this.commandMode ? '⚔ Command mode: drag to select your soldiers, click to send them.' : 'Command mode off.' });
+    if (this.commandMode) { this.selectArmy(); }   // auto-select your whole army on entry
+    else { this.selected = []; this.selBox = null; }
+    if (this.ui.setCommandBanner) this.ui.setCommandBanner(this.commandMode);
+  }
+
+  // select every soldier in the player's nation (one-click "rally the army")
+  selectArmy() {
+    if (!this.playerTribe) return;
+    const A = this.sim.pool.agents, army = [];
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i];
+      if (a.alive && a.tribeId === this.playerTribe.id && (a.role === 1 || a.role === 2)) army.push(a);
+    }
+    this.selected = army;
+    this.ui.toast({ type: 'info', msg: army.length ? `⚔ ${army.length} soldiers ready — click to move/attack` : 'No soldiers yet — raise aggression or set a city to ⚔ military.' });
   }
 
   // select your own units inside a world-space rectangle (prefers soldiers)

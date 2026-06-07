@@ -465,7 +465,20 @@ export class Sim {
       const odx = a.ordX - a.x, ody = a.ordY - a.y;
       const od = Math.hypot(odx, ody);
       if (od < 1.6) { a.ordered = false; }
-      else { mx = (odx / od) * 1.4; my = (ody / od) * 1.4; } // hard override — it obeys
+      else {
+        let dx = odx / od, dy = ody / od;
+        // lightweight pathfinding: if the way ahead is blocked (and we have no boat),
+        // deflect toward the nearest passable heading so units round coastlines/cliffs.
+        if (a.vehicle === 0 && !W.walkable(a.x + dx * 1.8, a.y + dy * 1.8)) {
+          const ANG = [0.7, -0.7, 1.4, -1.4, 2.2, -2.2];
+          for (let z = 0; z < ANG.length; z++) {
+            const c = Math.cos(ANG[z]), s = Math.sin(ANG[z]);
+            const nx = dx * c - dy * s, ny = dx * s + dy * c;
+            if (W.walkable(a.x + nx * 1.8, a.y + ny * 1.8)) { dx = nx; dy = ny; break; }
+          }
+        }
+        mx = dx * 1.4; my = dy * 1.4; // hard override — it obeys
+      }
     }
     // ARMY COMMAND: soldiers (warriors/rangers) march to the war-rally the player or
     // AI set — this is how you direct your military toward a front / a rival's city.
@@ -696,17 +709,26 @@ export class Sim {
   assignRoles() {
     const yr = this.year();
     const A = this.pool.agents;
+    // pass 1: current soldier count per tribe (soldiers are STICKY — a unit you
+    // select stays your unit; we only promote civilians up to the policy target).
+    const cnt = new Map();
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i]; if (!a.alive) continue;
+      let c = cnt.get(a.tribeId); if (!c) { c = { mem: 0, sol: 0 }; cnt.set(a.tribeId, c); }
+      c.mem++; if (a.role === 1 || a.role === 2) c.sol++;
+    }
+    // pass 2: promote civilians toward each nation's target army size
     for (let i = 0; i < A.length; i++) {
       const a = A[i];
-      if (!a.alive) continue;
+      if (!a.alive || a.role === 1 || a.role === 2) continue; // keep existing soldiers
       const tr = this.tribes.get(a.tribeId);
-      let fW = 0.07;
-      if (tr) fW += Math.max(0, tr.policy.aggression) * 0.30;
+      const c = cnt.get(a.tribeId); if (!c) continue;
+      let fW = 0.07 + (tr ? Math.max(0, tr.policy.aggression) * 0.30 : 0);
       if (fW > 0.45) fW = 0.45;
-      const prop = a.aggression * 0.5 + a.diet * 0.3 + ((a.size - 0.6) / 1.1) * 0.2; // martial propensity
-      const draw = hash2(a.id, 7, yr) - (prop - 0.5) * 0.35;  // martial individuals more likely fighters
-      if (draw < fW) a.role = (a.vision > 4.3 && a.size < 1.2) ? 2 : 1; // keen & light → ranger, else warrior
-      else a.role = 0;
+      if (c.sol >= c.mem * fW) continue;                     // army already at target
+      const prop = a.aggression * 0.5 + a.diet * 0.3 + ((a.size - 0.6) / 1.1) * 0.2;
+      const draw = hash2(a.id, 7, yr) - (prop - 0.5) * 0.35;
+      if (draw < fW) { a.role = (a.vision > 4.3 && a.size < 1.2) ? 2 : 1; c.sol++; }
     }
   }
 

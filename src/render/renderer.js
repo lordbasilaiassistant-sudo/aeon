@@ -22,6 +22,11 @@ export class Renderer {
     this.selection = null; // {agent} or {tribe}
     this.ghost = null;     // brush ghost {x,y,r,color}
     this.timeOfDay = 0.3;
+
+    // minimap (Civ-style strategic overview)
+    this.mini = document.getElementById('minimap');
+    this.mctx = this.mini ? this.mini.getContext('2d') : null;
+    this._miniT = 0;
   }
 
   resize(w, h) {
@@ -71,6 +76,54 @@ export class Renderer {
     Visuals.applyPost(this.ctx, this.cam, { timeOfDay: (this.sim.tick % 1440) / 1440, fx: this.fx });
 
     ctx.restore();
+    this.drawMinimap();
+  }
+
+  // Civ-style strategic minimap: a cached terrain+territory base (rebuilt ~every
+  // 2s) blitted each frame, with the live camera viewport rectangle on top.
+  drawMinimap() {
+    const m = this.mctx;
+    if (!m) return;
+    const mw = this.mini.width, mh = this.mini.height;
+    if (!this._miniBase) { this._miniBase = document.createElement('canvas'); this._miniBase.width = mw; this._miniBase.height = mh; }
+    this._miniT = (this._miniT || 0) + 1;
+    if (this._miniT % 120 === 1) this._rebuildMiniBase();
+    m.clearRect(0, 0, mw, mh);
+    m.imageSmoothingEnabled = false;
+    m.drawImage(this._miniBase, 0, 0);
+    // live camera viewport rectangle
+    const W = this.sim.world, vb = this.cam.viewBounds();
+    const rx = (vb.x0 / W.w) * mw, ry = (vb.y0 / W.h) * mh;
+    const rw = ((vb.x1 - vb.x0) / W.w) * mw, rh = ((vb.y1 - vb.y0) / W.h) * mh;
+    m.strokeStyle = 'rgba(255,255,255,0.9)'; m.lineWidth = 1;
+    m.strokeRect(rx + 0.5, ry + 0.5, Math.max(2, rw), Math.max(2, rh));
+  }
+
+  _rebuildMiniBase() {
+    const b = this._miniBase.getContext('2d'), W = this.sim.world;
+    const mw = this.mini.width, mh = this.mini.height;
+    b.imageSmoothingEnabled = false;
+    b.drawImage(this.terrain, 0, 0, W.w, W.h, 0, 0, mw, mh); // downscaled terrain
+    const T = this.sim.territory;
+    if (T) {
+      const owner = T.owner, sx = W.w / mw, sy = W.h / mh;
+      for (let py = 0; py < mh; py++) {
+        for (let px = 0; px < mw; px++) {
+          const id = owner[((py * sy) | 0) * W.w + ((px * sx) | 0)];
+          if (!id) continue;
+          const tr = this.sim.tribes.get(id);
+          if (!tr) continue;
+          b.fillStyle = `hsla(${tr.hue | 0},70%,55%,0.6)`;
+          b.fillRect(px, py, 1, 1);
+        }
+      }
+    }
+  }
+
+  // map a click on the minimap (px within the canvas) to a world point
+  miniToWorld(px, py) {
+    const W = this.sim.world;
+    return { x: (px / this.mini.width) * W.w, y: (py / this.mini.height) * W.h };
   }
 
   drawFood() {

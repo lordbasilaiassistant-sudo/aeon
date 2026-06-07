@@ -112,6 +112,13 @@ export class UI {
 
   bind(game) { this.game = game; }
 
+  // show/hide the COMMANDING banner + cursor (RTS command-mode discoverability)
+  setCommandBanner(on) {
+    const b = document.getElementById('command-banner');
+    if (b) b.classList.toggle('hidden', !on);
+    document.body.classList.toggle('commanding', !!on);
+  }
+
   // ---- governance helpers (the symmetric API; degrade gracefully) ---------
   _gov(method) {
     const g = this.game && this.game.gov;

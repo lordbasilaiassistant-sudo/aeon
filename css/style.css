@@ -267,6 +267,21 @@ body.mode-survival #dock { display: none; }
 
 @media (max-width: 560px){ .nation-policies { grid-template-columns: 1fr 1fr; } }
 
+/* ---------- command banner ---------- */
+#command-banner { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 30;
+  background: rgba(255,90,68,0.92); color: #fff; font-weight: 700; font-size: 13px; letter-spacing: 0.5px;
+  padding: 7px 18px; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
+  animation: slidedown 0.2s ease; pointer-events: none; }
+@keyframes slidedown { from { transform: translate(-50%, -12px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+body.commanding #game { cursor: crosshair; }
+
+/* ---------- minimap ---------- */
+#minimap-wrap { position: fixed; left: 12px; bottom: 12px; z-index: 20;
+  background: var(--panel); backdrop-filter: blur(10px); border: 1px solid var(--border);
+  border-radius: 10px; padding: 5px; box-shadow: var(--shadow); line-height: 0; }
+#minimap { display: block; border-radius: 6px; cursor: pointer; image-rendering: pixelated; }
+body.mode-survival #dock { display: none; }   /* (re-affirm) survival hides the divine hand */
+
 /* ---------- event log ---------- */
 #eventlog { position: fixed; bottom: 12px; right: 12px; z-index: 19; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 .toast { background: var(--panel); backdrop-filter: blur(12px); border: 1px solid var(--border);
