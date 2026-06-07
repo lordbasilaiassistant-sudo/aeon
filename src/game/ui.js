@@ -72,6 +72,7 @@ export class UI {
     $('nation-leave').onclick = () => this.game && this.game.ascend();
     if ($('nation-army')) $('nation-army').onclick = () => this.game && this.game.musterArmy();
     if ($('nation-found')) $('nation-found').onclick = () => this.game && this.game.foundCity();
+    document.querySelectorAll('.civ-banner').forEach((b) => { b.onclick = () => this.setNationTab(b.dataset.tab || 'research'); });
 
     // ---- god tools: build labels, wire click + hover tooltip ----
     this._buildTooltip();
@@ -162,6 +163,31 @@ export class UI {
     if (this.openTribe) this.refreshTribeStats();
     if (this.game && this.game.playerTribe) this.refreshNationBar();
     if (this._natOpen) this.refreshNationsPanel();
+    // Civ-style research/civic banners (shown only while leading a nation)
+    const cb = document.getElementById('civ-banners');
+    if (cb) {
+      if (this.game && this.game.playerTribe) { cb.classList.remove('hidden'); this.updateBanners(this.game.playerTribe); }
+      else cb.classList.add('hidden');
+    }
+  }
+
+  // fill the top-left research + civic banners (current target + progress)
+  updateBanners(tr) {
+    const sim = this._sim(); if (!sim) return;
+    const techs = (sim.tech && sim.tech.available) ? sim.tech.available(tr) : [];
+    this._setBanner('research-banner', 'Choose Research', techs, tr.tech ? tr.tech.points : 0);
+    const civics = (sim.civics && sim.civics.available) ? sim.civics.available(tr) : [];
+    this._setBanner('civic-banner', 'Choose a Civic', civics, tr.civics ? tr.civics.points : 0);
+  }
+  _setBanner(id, prompt, avail, points) {
+    const el = document.getElementById(id); if (!el) return;
+    const t = el.querySelector('.cb-text'), bar = el.querySelector('.cb-prog > i'), eta = el.querySelector('.cb-eta');
+    if (!avail || !avail.length) { t.textContent = prompt; bar.style.width = '0%'; eta.textContent = ''; return; }
+    const cur = avail.reduce((a, b) => (b.cost < a.cost ? b : a), avail[0]); // next to complete
+    const p = Math.max(0, Math.min(1, points / (cur.cost || 1)));
+    t.textContent = cur.name;
+    bar.style.width = (p * 100).toFixed(0) + '%';
+    eta.textContent = (p * 100 | 0) + '%';
   }
 
   // ---- inspector --------------------------------------------------------
