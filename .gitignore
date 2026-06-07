@@ -1,0 +1,8 @@
+# AEON has no build step and no dependencies — almost nothing to ignore.
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+# editor / OS cruft
+.vscode/
+.idea/

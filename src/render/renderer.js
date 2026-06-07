@@ -1,0 +1,274 @@
+// Renderer. Stylized top-down: hillshaded baked terrain + instanced-ish agent
+// dots/shapes + particle juice + day/night post. Everything culled to viewport.
+import { BIOME, BIOME_COLOR } from '../sim/world.js';
+import * as Visuals from './visuals.js';
+
+export class Renderer {
+  constructor(canvas, sim, camera, fx) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d', { alpha: false });
+    this.sim = sim;
+    this.cam = camera;
+    this.fx = fx;
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+
+    // offscreen baked terrain (1px per tile)
+    this.terrain = document.createElement('canvas');
+    this.terrain.width = sim.world.w;
+    this.terrain.height = sim.world.h;
+    this.tctx = this.terrain.getContext('2d');
+    this.bakeTerrain();
+
+    this.selection = null; // {agent} or {tribe}
+    this.ghost = null;     // brush ghost {x,y,r,color}
+    this.timeOfDay = 0.3;
+  }
+
+  resize(w, h) {
+    this.canvas.width = w * this.dpr;
+    this.canvas.height = h * this.dpr;
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this.cam.resize(w, h);
+  }
+
+  bakeTerrain() {
+    // Workstream D — premium terrain (coastlines, depth-shaded water, hillshade).
+    Visuals.bakeTerrain(this.sim.world, this.tctx);
+  }
+
+  render() {
+    const ctx = this.ctx, cam = this.cam, W = this.sim.world;
+    if (W.dirty) this.bakeTerrain();
+
+    ctx.save();
+    ctx.scale(this.dpr, this.dpr);
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(this.fx.shakeX, this.fx.shakeY);
+
+    // sky/void background
+    ctx.fillStyle = '#0a0d14';
+    ctx.fillRect(-20, -20, cam.viewW + 40, cam.viewH + 40);
+
+    // terrain
+    const tl = cam.worldToScreen(0, 0);
+    ctx.drawImage(this.terrain, 0, 0, W.w, W.h, tl.x, tl.y, W.w * cam.zoom, W.h * cam.zoom);
+
+    Visuals.drawWaterShimmer(this.ctx, this.cam, this.sim);
+    Visuals.drawFood(this.ctx, this.cam, this.sim);
+    this.drawTerritory();
+    Visuals.drawBorders(this.ctx, this.cam, this.sim);
+    Visuals.drawResources(this.ctx, this.cam, this.sim);
+    Visuals.drawAnimals(this.ctx, this.cam, this.sim);
+    Visuals.drawSettlements(this.ctx, this.cam, this.sim);
+    Visuals.drawAgents(this.ctx, this.cam, this.sim);
+    this.drawSelection();
+    this.drawArmyTarget();
+    this.drawGhost();
+    this.drawFX();
+    Visuals.drawClouds(this.ctx, this.cam, this.sim);   // drifting atmosphere over the world
+    Visuals.applyPost(this.ctx, this.cam, { timeOfDay: (this.sim.tick % 1440) / 1440, fx: this.fx });
+
+    ctx.restore();
+  }
+
+  drawFood() {
+    const ctx = this.ctx, cam = this.cam, W = this.sim.world;
+    if (cam.zoom < 2.5) return; // too zoomed out to matter
+    const vb = cam.viewBounds();
+    ctx.fillStyle = 'rgba(190,235,120,0.5)';
+    const s = Math.max(1, cam.zoom * 0.28);
+    for (let y = vb.y0; y < vb.y1; y++) {
+      for (let x = vb.x0; x < vb.x1; x++) {
+        const f = W.food[W.idx(x, y)];
+        if (f < 0.35) continue;
+        const p = cam.worldToScreen(x + 0.5, y + 0.5);
+        const sz = s * f;
+        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      }
+    }
+  }
+
+  drawTerritory() {
+    const ctx = this.ctx, cam = this.cam;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const tr of this.sim.tribes.values()) {
+      if (tr.members < 3) continue;
+      const p = cam.worldToScreen(tr.capitalX, tr.capitalY);
+      const r = Math.max(8, Math.sqrt(tr.members) * cam.zoom * 0.6);
+      const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      grd.addColorStop(0, `hsla(${tr.hue},70%,55%,0.16)`);
+      grd.addColorStop(1, `hsla(${tr.hue},70%,55%,0)`);
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+
+    // capital banners + names at mid/low zoom
+    if (cam.zoom > 2) {
+      ctx.textAlign = 'center';
+      ctx.font = `${Math.max(9, Math.min(15, cam.zoom * 0.9)) | 0}px ui-sans-serif, system-ui, sans-serif`;
+      for (const tr of this.sim.tribes.values()) {
+        if (tr.members < 5) continue;
+        const p = cam.worldToScreen(tr.capitalX, tr.capitalY);
+        ctx.fillStyle = `hsl(${tr.hue},75%,72%)`;
+        ctx.globalAlpha = Math.min(1, (cam.zoom - 2) / 4);
+        ctx.fillText((tr.isPlayer ? '★ ' : '') + tr.name, p.x, p.y - 6);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  drawAgents() {
+    const ctx = this.ctx, cam = this.cam;
+    const A = this.sim.pool.agents;
+    const z = cam.zoom;
+    const baseR = Math.max(1, z * 0.16);
+    const detailed = z > 7;
+
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i];
+      if (!a.alive) continue;
+      const p = cam.worldToScreen(a.x, a.y);
+      if (p.x < -8 || p.y < -8 || p.x > cam.viewW + 8 || p.y > cam.viewH + 8) continue;
+
+      const tr = this.sim.tribes.get(a.tribeId);
+      const hue = tr ? tr.hue : a.hue;
+      const light = 38 + a.energy * 26 + a.health * 8;     // brighter = healthier/fed
+      const r = baseR * a.size;
+
+      // signal / speak glow (culture)
+      if (a.signal > 0.05) {
+        ctx.fillStyle = `hsla(${hue},90%,75%,${a.signal * 0.4})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4, 0, 7); ctx.fill();
+      }
+
+      ctx.fillStyle = `hsl(${hue},${50 + a.diet * 30}%,${light}%)`;
+      if (detailed) {
+        // body + facing nub
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+        const sp = Math.hypot(a.vx, a.vy) || 1;
+        ctx.fillStyle = `hsl(${hue},70%,${light + 18}%)`;
+        ctx.beginPath();
+        ctx.arc(p.x + (a.vx / sp) * r, p.y + (a.vy / sp) * r, r * 0.5, 0, 7);
+        ctx.fill();
+        // act flash
+        if (a.lastAct === 2) { ctx.strokeStyle = '#ff5544'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r * 1.6, 0, 7); ctx.stroke(); }
+      } else {
+        ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+      }
+      a.lastAct = 0;
+    }
+  }
+
+  drawSelection() {
+    const sel = this.selection;
+    if (!sel) return;
+    const ctx = this.ctx, cam = this.cam;
+    if (sel.agent && sel.agent.alive) {
+      const a = sel.agent;
+      const p = cam.worldToScreen(a.x, a.y);
+      const r = Math.max(6, cam.zoom * 0.5);
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (sel.tribe) {
+      const tr = sel.tribe;
+      const p = cam.worldToScreen(tr.capitalX, tr.capitalY);
+      const r = Math.max(14, Math.sqrt(tr.members) * cam.zoom * 0.7);
+      ctx.strokeStyle = `hsl(${tr.hue},80%,70%)`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke();
+    }
+  }
+
+  drawArmyTarget() {
+    const t = this.armyTarget;
+    if (!t) return;
+    const ctx = this.ctx, p = this.cam.worldToScreen(t.x, t.y);
+    const r = 8 + Math.sin(this.sim.tick * 0.15) * 2;   // pulsing rally marker
+    ctx.strokeStyle = '#ff7755'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#ff9a7a'; ctx.textAlign = 'center';
+    ctx.font = '13px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText('⚔', p.x, p.y + 4);
+  }
+
+  drawGhost() {
+    if (!this.ghost) return;
+    const ctx = this.ctx, cam = this.cam, g = this.ghost;
+    const p = cam.worldToScreen(g.x, g.y);
+    ctx.strokeStyle = g.color || 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(p.x, p.y, g.r * cam.zoom, 0, 7); ctx.stroke();
+  }
+
+  drawFX() {
+    const ctx = this.ctx, cam = this.cam, fx = this.fx;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const o of fx.particles) {
+      const p = cam.worldToScreen(o.x, o.y);
+      ctx.globalAlpha = o.life / o.max;
+      ctx.fillStyle = o.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, o.r * Math.max(1, cam.zoom * 0.2), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const o of fx.rings) {
+      const p = cam.worldToScreen(o.x, o.y);
+      ctx.globalAlpha = o.life / o.max;
+      ctx.strokeStyle = o.color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, o.r * cam.zoom, 0, 7); ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'center';
+    ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+    for (const o of fx.texts) {
+      const p = cam.worldToScreen(o.x, o.y);
+      ctx.globalAlpha = o.life / o.max;
+      ctx.fillStyle = o.color;
+      ctx.fillText(o.str, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  drawDayNight() {
+    const ctx = this.ctx, cam = this.cam;
+    // time of day from sim tick (one day ~ 24s at 60fps)
+    const t = (this.sim.tick % 1440) / 1440;
+    this.timeOfDay = t;
+    // brightness curve: noon bright, midnight dark
+    const sun = Math.sin(t * Math.PI * 2 - Math.PI / 2) * 0.5 + 0.5; // 0 night .. 1 noon
+    const nightAlpha = (1 - sun) * 0.5;
+    if (nightAlpha > 0.02) {
+      ctx.fillStyle = `rgba(20,28,60,${nightAlpha})`;
+      ctx.fillRect(0, 0, cam.viewW, cam.viewH);
+    }
+    // warm dawn/dusk tint
+    const golden = Math.max(0, 1 - Math.abs(sun - 0.25) * 4) * 0.12;
+    if (golden > 0.01) {
+      ctx.fillStyle = `rgba(255,170,90,${golden})`;
+      ctx.fillRect(0, 0, cam.viewW, cam.viewH);
+    }
+
+    // vignette
+    const g = ctx.createRadialGradient(
+      cam.viewW / 2, cam.viewH / 2, Math.min(cam.viewW, cam.viewH) * 0.35,
+      cam.viewW / 2, cam.viewH / 2, Math.max(cam.viewW, cam.viewH) * 0.72);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.38)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, cam.viewW, cam.viewH);
+
+    // god-power full flash
+    if (this.fx.flash > 0.01) {
+      ctx.fillStyle = `rgba(${this.fx.flashColor},${this.fx.flash * 0.5})`;
+      ctx.fillRect(0, 0, cam.viewW, cam.viewH);
+    }
+  }
+}
+
+function clamp(v) { return v < 0 ? 0 : v > 255 ? 255 : v | 0; }

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AEON — a living world of evolving minds</title>
+  <meta name="description" content="A god-game and civilization simulator where every creature is driven by a real, evolving neural network. Be the god that reshapes the world, or descend and play as one nation. Runs entirely in your browser." />
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <div id="loading">
+    <div class="loading-inner">
+      <h1>AEON</h1>
+      <p class="tagline">a living world of evolving minds</p>
+      <div class="loading-bar"><div class="loading-bar-fill" id="loadbar"></div></div>
+      <p class="loading-status" id="loadstatus">seeding the world…</p>
+    </div>
+  </div>
+
+  <canvas id="game"></canvas>
+
+  <!-- HUD overlay -->
+  <div id="hud" class="hidden">
+    <!-- top bar -->
+    <div id="topbar">
+      <div class="topbar-left">
+        <span class="logo">AEON</span>
+        <span id="mode-badge" class="mode-badge god">GOD</span>
+      </div>
+      <div class="topbar-center" id="world-stats">
+        <span class="stat" title="Year"><span class="stat-icon">☀</span><span id="stat-year">0</span></span>
+        <span class="stat" title="Living minds"><span class="stat-icon">◉</span><span id="stat-pop">0</span></span>
+        <span class="stat" title="Generations"><span class="stat-icon">🜂</span><span id="stat-gen">0</span></span>
+        <span class="stat" title="Nations"><span class="stat-icon">⚑</span><span id="stat-nations">0</span></span>
+        <span class="stat" title="Peak brain fitness"><span class="stat-icon">✦</span><span id="stat-fit">0</span></span>
+      </div>
+      <div class="topbar-right">
+        <button id="btn-nations" class="ctrl" title="Browse & play as a nation">⚑ Nations</button>
+        <button id="btn-speed" class="ctrl" title="Simulation speed">▶ 1×</button>
+        <button id="btn-help" class="ctrl" title="Intro">?</button>
+        <button id="btn-menu" class="ctrl" title="Menu — help, tools, restart">☰</button>
+      </div>
+    </div>
+
+    <!-- left tool dock -->
+    <div id="dock">
+      <div class="dock-group" id="dock-god">
+        <div class="dock-label">DIVINE HAND</div>
+        <button class="tool" data-tool="inspect">🔍</button>
+        <button class="tool" data-tool="raise">⛰</button>
+        <button class="tool" data-tool="lower">🌊</button>
+        <button class="tool" data-tool="forest">🌲</button>
+        <button class="tool" data-tool="spawn">✿</button>
+        <button class="tool" data-tool="food">🍒</button>
+        <button class="tool" data-tool="smite">⚡</button>
+        <button class="tool" data-tool="possess">👁</button>
+      </div>
+    </div>
+
+    <!-- right inspector panel -->
+    <div id="inspector" class="panel hidden">
+      <div class="panel-head">
+        <span id="insp-title">Inspector</span>
+        <button class="panel-close" id="insp-close">✕</button>
+      </div>
+      <div class="panel-body" id="insp-body"></div>
+    </div>
+
+    <!-- nations browser panel -->
+    <div id="nations-panel" class="panel hidden">
+      <div class="panel-head">
+        <span>⚑ Nations</span>
+        <button class="panel-close" id="nations-close">✕</button>
+      </div>
+      <div class="panel-body" id="nations-list"></div>
+    </div>
+
+    <!-- nation control HUD (shown when leading a nation) -->
+    <div id="nation-bar" class="hidden">
+      <div class="nation-head">
+        <span class="nation-flag" id="nation-flag">⚑</span>
+        <span class="nation-name" id="nation-name">—</span>
+        <button id="nation-army" title="March your soldiers to a spot on the map">⚔ Army</button>
+        <button id="nation-leave" title="Ascend back to godhood">↑ Ascend</button>
+      </div>
+      <div class="nation-stats" id="nation-stats"></div>
+      <div class="nation-tabs">
+        <button class="ntab active" data-ntab="policies">Policies</button>
+        <button class="ntab" data-ntab="research">Research</button>
+        <button class="ntab" data-ntab="diplo">Diplomacy</button>
+        <button class="ntab" data-ntab="destiny">Destiny</button>
+      </div>
+      <div class="nation-tabbody">
+        <div class="ntab-page" data-page="policies"><div class="nation-policies" id="nation-policies"></div></div>
+        <div class="ntab-page hidden" data-page="research" id="nation-research"></div>
+        <div class="ntab-page hidden" data-page="diplo" id="nation-diplo"></div>
+        <div class="ntab-page hidden" data-page="destiny" id="nation-destiny"></div>
+      </div>
+    </div>
+
+    <!-- bottom toast / event log -->
+    <div id="eventlog"></div>
+  </div>
+
+  <!-- START SCREEN: choose Survival or Creative -->
+  <div id="start-screen">
+    <div class="start-inner">
+      <h1 class="start-logo">AEON</h1>
+      <p class="start-tag">a world of evolving minds — every soul thinks with a real neural network</p>
+      <div class="mode-cards">
+        <button class="mode-card" id="mode-survival">
+          <div class="mode-ico">⚑</div>
+          <div class="mode-title">Survival</div>
+          <div class="mode-sub">Create a people and lead them</div>
+          <div class="mode-desc">Play as one nation in a living world. Explore, settle, research, trade, war and endure — no divine powers. Rival peoples rise around you. The Civ way.</div>
+          <div class="mode-go">Lead a people →</div>
+        </button>
+        <button class="mode-card" id="mode-creative">
+          <div class="mode-ico">✷</div>
+          <div class="mode-title">Creative</div>
+          <div class="mode-sub">Shape the world as a god</div>
+          <div class="mode-desc">The divine hand: raise mountains, carve seas, grow forests, spawn life, smite. No goals — sculpt and watch civilizations rise and fall.</div>
+          <div class="mode-go">Become a god →</div>
+        </button>
+      </div>
+      <p class="start-foot">Free &amp; open source · runs entirely on your machine · nothing is sent anywhere</p>
+    </div>
+  </div>
+
+  <!-- CREATE YOUR PEOPLE (Survival) -->
+  <div id="create-screen" class="hidden">
+    <div class="create-inner">
+      <button class="create-back" id="create-back">← Back</button>
+      <h2 class="create-title">Found a People</h2>
+      <p class="create-note">Their heritage shapes the brains they are born with — evolution takes it from there.</p>
+
+      <label class="field-label">Name</label>
+      <div class="name-row">
+        <input id="people-name" class="name-input" type="text" maxlength="24" placeholder="the Aurelian Kin" />
+        <button id="name-roll" class="roll-btn" title="Random name">🎲</button>
+      </div>
+
+      <label class="field-label">Banner</label>
+      <div id="banner-swatches" class="swatches"></div>
+
+      <label class="field-label">Heritage <span class="field-hint">— choose up to two</span></label>
+      <div id="create-traits" class="trait-chips"></div>
+
+      <div id="homeland-note" class="homeland-note">Your people will settle a fertile homeland of their own, far from rivals.</div>
+
+      <button id="create-begin" class="big-btn create-begin">Begin their story</button>
+    </div>
+  </div>
+
+  <!-- menu modal (help / controls / tools / restart) -->
+  <div id="menu-modal" class="modal hidden">
+    <div class="modal-card menu-card" id="menu-card"></div>
+  </div>
+
+  <!-- help / intro modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>You are a god. You can also be one of them.</h2>
+      <p><strong>AEON</strong> is a world where every creature thinks with its own tiny neural network — a real brain that mutates and evolves across generations. Nobody is scripted. They learn to survive, gather, breed, band into tribes, and war over land. All of it runs on <em>your</em> computer; nothing is sent anywhere.</p>
+      <div class="how-grid">
+        <div><span class="how-key">Scroll</span> zoom — the world is one continuous space from orbit to the ground</div>
+        <div><span class="how-key">Drag</span> pan the world</div>
+        <div><span class="how-key">Left tools</span> shape land, grow forests, spawn life, smite, bless</div>
+        <div><span class="how-key">Click a creature</span> open its brain and lineage</div>
+        <div><span class="how-key">⚑ Nations</span> browse a nation, then <span class="how-key">Play as</span> to lead it — set its will, research, diplomacy &amp; destiny, or descend into one body</div>
+        <div><span class="how-key">Space</span> pause · <span class="how-key">1–5</span> speed · <span class="how-key">☰</span> menu</div>
+      </div>
+      <p class="modal-note">The world never pauses for you. Zoom out to feel powerful; zoom in to feel attached.</p>
+      <button id="modal-start" class="big-btn">Begin</button>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
