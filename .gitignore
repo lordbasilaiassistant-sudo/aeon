@@ -9,3 +9,5 @@ Thumbs.db
 # scratch workflow / playtest scripts (not part of the game)
 test/_*.js
 test/_*.mjs
+
+test/_*
