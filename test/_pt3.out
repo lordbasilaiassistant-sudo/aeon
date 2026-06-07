@@ -1,0 +1,6 @@
+=== SURVIVABILITY SWEEP (peaceful, breed+, 10 seeds, 100yr each) ===
+seed   1: DEAD  final=  0 peakPop= 54 peakSettles=2 bestTier=Vil peakEra=0 (knownTechs=2/24)
+seed   2: DEAD  final=  0 peakPop= 52 peakSettles=2 bestTier=Vil peakEra=0 (knownTechs=3/24)
+seed   3: DEAD  final=  0 peakPop=269 peakSettles=6 bestTier=Town peakEra=1 (knownTechs=8/24)
+seed   7: ALIVE final= 56 peakPop=190 peakSettles=5 bestTier=Town peakEra=1 (knownTechs=8/24)
+seed  11: DEAD  final=  0 peakPop= 60 peakSettles=2 bestTier=Vil peakEra=1 (knownTechs=7/24)
