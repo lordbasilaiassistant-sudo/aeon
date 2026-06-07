@@ -109,6 +109,9 @@ body.mode-survival #dock { display: none; }
 .insp-diplo .dbtn.war:hover { background: var(--danger); color: #1a0805; border-color: var(--danger); }
 .insp-diplo .dbtn.peace:hover { background: #5ad06a; color: #06210c; border-color: #5ad06a; }
 .insp-diplo .dbtn.ally:hover { background: var(--gold); color: #1a1405; border-color: var(--gold); }
+.insp-diplo .tbtn { flex: 1; border-radius: 8px; padding: 7px 3px; font-size: 11px; font-weight: 700;
+  cursor: pointer; border: 1px solid var(--border); background: rgba(240,200,105,0.12); color: var(--gold); }
+.insp-diplo .tbtn:hover { background: var(--gold); color: #1a1405; border-color: var(--gold); }
 .settle-blds { font-size: 12px; color: #b9c4d6; line-height: 1.5; }
 .stance-badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
 .stance-war { background: rgba(255,106,90,0.22); color: #ff9a8a; }

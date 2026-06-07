@@ -2,7 +2,13 @@
 
 _Last updated: 2026-06-07 17:55 EDT_
 
-## ALL 14 task-board mechanics complete — a deep, living Civ-like sim
+## Reality check (drlor, 2026-06-07): ~5% to a truly playable game
+The MECHANICS are scaffolded and the sim runs, but that is NOT a finished game. The felt
+experience — controls/UX depth, balance, strategic depth, polish, fun, onboarding, bug-free
+play, graphics quality — is the ~95% still ahead. The list below is "systems that exist," not
+"a game that's done." Keep grinding, report plainly.
+
+## Mechanics scaffolded so far
 Every creature is an evolving neural net. On top of that now runs: Civ-first start (Survival/Creative
 + create-a-people), tech tree, civics tree → governments, anthropology (emergent ethos/customs),
 permanent settler-founded cities, territory & country borders, a living map (farmland/urban cities

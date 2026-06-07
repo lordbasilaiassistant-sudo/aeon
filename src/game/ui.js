@@ -280,6 +280,12 @@ export class UI {
           <button class="dbtn peace" data-d="peace">☮ Peace</button>
           <button class="dbtn ally" data-d="ally">🤝 Ally</button>
         </div>
+        <div class="trait-head">trade (gold → their goods)</div>
+        <div class="insp-diplo">
+          <button class="tbtn" data-buy="wood">🪵 8 · 6g</button>
+          <button class="tbtn" data-buy="stone">🪨 8 · 8g</button>
+          <button class="tbtn" data-buy="metal">⚒ 6 · 18g</button>
+        </div>
         <div class="insp-actions"><button id="act-possess2">👁 Possess a citizen</button></div>`;
     } else {
       // no player nation yet (Creative / observing) — offer to take them
@@ -302,6 +308,15 @@ export class UI {
           else if (d === 'peace') { const g = this._gov('makePeace'); if (g) g.makePeace(sim, me, tr); }
           else if (d === 'ally') { const g = this._gov('proposeAlliance'); if (g) g.proposeAlliance(sim, me, tr); }
           this.renderTribe(tr, game); // refresh stance badge
+        };
+      });
+      const TRADES = { wood: { gold: 6, amt: 8 }, stone: { gold: 8, amt: 8 }, metal: { gold: 18, amt: 6 } };
+      this.el.inspBody.querySelectorAll('.tbtn').forEach((b) => {
+        b.onclick = () => {
+          const g = this._gov('proposeTrade'); if (!g) return;
+          const r = b.dataset.buy, deal = TRADES[r];
+          const ok = g.proposeTrade(this._sim(), me, tr, { gold: deal.gold }, { [r]: deal.amt });
+          this.toast({ type: ok ? 'info' : 'extinct', msg: ok ? `Bought ${deal.amt} ${r} from ${tr.name}` : `${tr.name} declines the trade` });
         };
       });
     }

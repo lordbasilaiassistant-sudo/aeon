@@ -192,6 +192,28 @@ export class Governance {
   makePeace(sim, a, b) { return sim.diplomacy ? sim.diplomacy.makePeace(sim, a, b) : false; }
   proposeAlliance(sim, a, b) { return sim.diplomacy ? sim.diplomacy.proposeAlliance(sim, a, b) : false; }
 
+  // ---- TRADE: exchange gold / resources by mutual agreement -----------------
+  _tval(deal) { const W = { gold: 1, wood: 0.6, stone: 0.8, ore: 1.5, metal: 3 }; let v = 0; for (const k in deal) v += (deal[k] || 0) * (W[k] || 0); return v; }
+  _owns(tribe, deal) { for (const k in deal) { const have = k === 'gold' ? (tribe.gold || 0) : ((tribe.stock && tribe.stock[k]) || 0); if (have < deal[k]) return false; } return true; }
+  _shift(tribe, deal, sign) { for (const k in deal) { const amt = deal[k] * sign; if (k === 'gold') tribe.gold = (tribe.gold || 0) + amt; else tribe.stock[k] = (tribe.stock[k] || 0) + amt; } }
+  // `from` offers `give` and requests `get` from `to`. Executes iff both own their
+  // side and `to` agrees (an AI accepts a deal that gains it value; allies are kinder).
+  proposeTrade(sim, from, to, give, get) {
+    if (!from || !to || from === to) return false;
+    const dip = sim.diplomacy;
+    if (dip && dip.atWar(sim, from, to)) return false;           // no trade with an enemy
+    if (!this._owns(from, give) || !this._owns(to, get)) return false;
+    if (!to.isPlayer) {                                          // AI evaluates the offer
+      const gain = this._tval(give), cost = this._tval(get);
+      const bar = (dip && dip.stanceBetween(sim, from, to) === 'ally') ? 0.85 : 0.97;
+      if (gain < cost * bar) return false;
+    }
+    this._shift(from, give, -1); this._shift(to, give, +1);      // from → to
+    this._shift(to, get, -1); this._shift(from, get, +1);        // to → from
+    if (sim.emit) sim.emit('trade', `${from.name} trades with ${to.name}`, from.capitalX, from.capitalY, from.hue);
+    return true;
+  }
+
   // destiny (opt-in goal)
   setDestiny(sim, tribe, id) {
     if (!tribe) return;
@@ -409,6 +431,21 @@ export class Governance {
       // seek an alliance with a peaceful, comparable neighbour
       if (allyTarget && tribe.policy.aggression < 0.15 && allyP < ALLY_PRESSURE) {
         if (dip.stanceBetween(sim, tribe, allyTarget) === 'neutral') dip.proposeAlliance(sim, tribe, allyTarget);
+      }
+      // TRADE: buy a resource we're short on from a peaceful neighbour with a surplus
+      if (tribe.gold > 14) {
+        const NEED = ['metal', 'ore', 'wood', 'stone'];
+        const PRICE = { metal: 15, ore: 9, wood: 6, stone: 6 };
+        for (let i = 0; i < neigh.length && tribe.gold > 14; i++) {
+          const nb = neigh[i];
+          if (dip.atWar(sim, tribe, nb)) continue;
+          for (let j = 0; j < NEED.length; j++) {
+            const r = NEED[j];
+            if ((tribe.stock[r] || 0) < 6 && ((nb.stock && nb.stock[r]) || 0) >= 10) {
+              if (this.proposeTrade(sim, tribe, nb, { gold: PRICE[r] }, { [r]: 8 })) break;
+            }
+          }
+        }
       }
     }
 
