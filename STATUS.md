@@ -1,75 +1,97 @@
 # AEON — Current Status
 
-_Last updated: 2026-06-07 17:55 EDT_
+_Last updated: 2026-06-13 (post Sprint 1)_
 
-## Reality check (drlor, 2026-06-07): ~5% to a truly playable game
-The MECHANICS are scaffolded and the sim runs, but that is NOT a finished game. The felt
-experience — controls/UX depth, balance, strategic depth, polish, fun, onboarding, bug-free
-play, graphics quality — is the ~95% still ahead. The list below is "systems that exist," not
-"a game that's done." Keep grinding, report plainly.
+## Reality check (drlor): still early — ~5–6/10 "plays as a game"
+Recon graded the pre-Sprint-1 build **4.5/10** on "plays as a game." Sprint 1 (2026-06-13) fixed the
+render bottleneck, made the Found-a-City verb reachable with reasoned rejections, and wired flow-field
+pathfinding into ordered movement. The verbs are closer to feeling good — but the headline gap is still
+open: **the player nation passively collapses and there is no win/lose state**, so AEON is not yet a game
+you can win or lose. This is "systems that exist and a couple of verbs that now work," NOT "a finished game."
+Keep grinding, report plainly.
 
-## Mechanics scaffolded so far
-Every creature is an evolving neural net. On top of that now runs: Civ-first start (Survival/Creative
-+ create-a-people), tech tree, civics tree → governments, anthropology (emergent ethos/customs),
-permanent settler-founded cities, territory & country borders, a living map (farmland/urban cities
-reshape the land), the full economy (resources → gather → haul → stockpile → refine to metal, run by
-the evolved NNs), thirst as a 2nd survival need, combat & unit-roles (warrior/ranger, melee/ranged,
-stamina, weapons from metal), diplomacy/war/destinies (AI nations self-run), animals (prey/predator
-ecosystem), vehicles (Sailing→boats cross water, Flight→planes), universal clickable entities w/
-context diplomacy, and an animated look (water shimmer, clouds, smoke, haulers carrying loads, idle
-breathing). Headless ALL PASS throughout; verified in-browser at ~60 FPS with streaming
-diplomacy/civics/extinction events. Full per-step log in CHANGELOG.md.
+**AEON** = a browser god-game/civ-sim where every creature is a real, evolving neural network. God +
+nation + avatar agency. Local-only, no servers, open source, zero deps.
+Run: `npm run serve` → http://localhost:8123 (or open `index.html` via any static host).
 
+## What works now (verified against the code + headless test)
 
-## Now plays like a Civ-first game (solo build session)
-- **Start screen → mode select** (Survival / Creative) → **Create Your People** (name, banner, heritage
-  traits applied to the founding genome) → lead that nation. God tools gated to Creative.
-- **Click anything, context-aware**: zoomed out → click settlements/nations (foreign = ⚔War/☮Peace/🤝Ally
-  via the shared GovernanceAPI; yours = control); zoomed in → click a creature (its live brain).
-- **Country borders** drawn in nation colors; **nation HUD** (policies/research/diplomacy/destiny) +
-  AI nations running their own statecraft (war pressure, stances, tech priorities, destinies).
-- Headless ALL PASS (pop 3200, gen 28, 6.7ms/tick). Browser-verified end to end.
+### Sprint 1 fixes (2026-06-13, all verified in-tree)
+- **~29x render perf** (#4, CLOSED). `src/render/renderer.js` adds viewport culling, a dpr/quality
+  governor (`_applyQuality('auto')`), a renderScale clamp, and LOD/particle thinning. Measured
+  **~33.9 ms → ~1.2 ms/frame at zoom 8.2** (~29x); live-verified ~6.8 ms at zoom 8 with ~2,200 agents.
+  This is what fixed the GitHub Pages load on dpr 2–3 devices. Closed by `d672faa`.
+- **Found-a-City is now reachable** (#1, CLOSED). `src/sim/territory.js` sets `TREASURY_RESERVE = 12`;
+  auto border-expansion only spends gold *above* that floor, so a young nation banks past the 10g found
+  cost instead of sitting at 0–2 forever (reaches ~12 gold by year 3; live build showed 28.6 gold).
+  Closed by `d672faa`.
+- **Found rejections now explain themselves** (#2, CLOSED). `src/sim/settlement.js` relaxes min-spacing
+  `8 → 5` tiles (`FOUND_MIN_SPACE = 5`) and sets `lastFoundReason` to `'water'` / `'occupied'` /
+  `'too_close'`, surfaced as a toast in `src/game/game.js`. You now learn *why* a tile was rejected.
+  Closed by `d672faa`.
+- **Pathfinding wired into orders** (#3, still OPEN — see below). `src/sim/pathfind.js` (flow-field;
+  exports `buildField` / `stepFrom`) is imported in `src/sim/sim.js` and drives the order block for
+  foot units (replacing the old 6-angle deflector). An ordered unit now routes around water/mountains
+  and **arrives in isolation** (probe 48.6 → 1.2 tiles). Landed in `d672faa` as `Refs #3`; issue kept
+  OPEN on purpose because real-play long marches still fail (coupled to #8).
+- **CI invariant gate** (INFRA). `.github/workflows/ci.yml` runs `node test/headless.mjs` on every
+  push/PR to main and exits non-zero on regression. `package.json` adds `test` and `serve` scripts.
+  Currently **GREEN** (life persists, evolution to gen ~27, population stable). Landed in `87a13d6`.
 
+### The living world (pre-existing, still true)
+- **Every creature is an evolving neural net.** Tiny MLPs think every tick; traits measurably evolve
+  under the energy economy. Headless test confirms life persists and evolves.
+- **Civ-first loop**: Survival/Creative start, create-a-people (name/banner/heritage genome), tech tree,
+  civics → governments, emergent anthropology/ethos, permanent settler-founded cities, territory/borders,
+  a living map, full resource economy (gather → haul → stockpile → refine), thirst, combat/unit-roles,
+  diplomacy/war/destinies (AI nations self-run), animals, vehicles, universal clickable entities.
+- **Dual agency**: god tools, nation policy injected into citizens' NN inputs, possession, all via UI +
+  `window.AEON` debug API.
 
-**AEON** = a browser god-game/civ-sim where every creature has a real evolving neural
-network. God + nation + avatar agency. Local-only, no servers, open source, zero deps.
-Run: `node serve.mjs` → http://localhost:8123  (or open index.html via a static host).
+## What is still broken / the next priority (honest)
 
-## What works NOW (verified)
-- **Living, evolving world**: ~2,600 tiny-MLP creatures think every tick; traits measurably
-  evolve under the energy economy (headless test reaches gen 21, life persists & stays stable).
-- **Tech progression**: nations accrue research (sublinear in pop) and unlock a ~26-tech tree
-  across 9 eras; unlocked caps change behavior (moveMul/foodYield/combat/healthRegen). Events
-  fire: "X discovers Animal Husbandry — Stone Age Era".
-- **Settlements**: dense clusters found Camps that grow Village→Town→City; rendered with
-  rooftop clusters + names; events fire ("Gormire grows into a Town").
-- **Culture**: per-tribe language + religions that can arise & spread (events fire).
-- **Dual agency**: god tools (raise/lower/forest/spawn/food/smite), nation policy (will injected
-  into citizens' NN inputs), possession (descend into a body, WASD). All functional via UI + debug API.
-- **Visuals**: stylized terrain w/ coastlines + depth-shaded water + hillshade, readable agents,
-  settlement buildings, subtle post (bloom/day-night/vignette), juice/FX. (v0.1 muddy/noisy issues fixed.)
-- **Runs in browser** at playable FPS; no console errors; debug API (`window.AEON`) for beta-testing.
+1. **#8 (P0) — the player nation passively COLLAPSES and there is no fail-state.** Population trends
+   ~52 → 26 by year 30 and toward extinction. The cull exempts `isPlayer`, so there is also **no
+   game-over / defeat screen** (recon fail-state score 1.5/10). No FAILSTATE/ENDSCREEN code exists yet.
+   This is the **#1 next priority** — it blocks AEON being winnable or losable.
+2. **#8 (P0) — MARCH-SURVIVE.** Ordered units do **not** forage or rest mid-march, so on a long march
+   they run down and stall. In real play a 3-soldier army ordered 35 tiles closed only ~28% in 400
+   ticks, even though isolated pathfinding probes arrive. Pathfinding is correct in isolation; the
+   survival/order coupling is the broken link. This is why **#3 stays OPEN** and command does not yet
+   FEEL good over long distances.
+3. **#5 (P1) — command/found modes are not discoverable.** They are silent toggles with no
+   banner/cursor/coach-mark. Nothing shipped for this in Sprint 1.
 
-## Known tuning items (tracked, not blockers)
-- Monoculture: tribes still merge toward 1–2 over time → needs tribe FISSION for lasting diversity.
-- Settlements thin as tribes merge; settlement persistence needs work.
-- Perf: ~13–16 ms/tick at 2,600 agents (smooth at 1×; SoA + WebGL instancing is the scale path).
-- Tech still needs the Civ6-grounded revision (two-tree + eurekas + governments) — design ready
-  in `TECH_TREE_DESIGN.md`.
+## In flight (landed but NOT shipped/wired — next slices)
+- **3D renderer (#9)** — direction locked to WebGL2 (Citystate-referenced) in `GRAPHICS_3D_DESIGN.md`
+  (committed `f0d77a2`). A real spike exists in the working tree — `src/render/gl3d.js` (`class GL3D`
+  with an `isSupported()` probe) plus `src/render/iso25.js` — but these are **untracked, uncommitted,
+  and not wired into `renderer.js`.** Treat #9 as "direction locked + local spike," not shipped.
+- **Statecraft war-GOAL / peace-TERMS / treasury lever** — `setWarGoal` / `warStatus` / `warTerms` /
+  `setTreasuryFocus` / `setWarRally` and the `_wars`/`_peace` record model landed in
+  `src/game/governance.js` + `src/sim/diplomacy.js` (VALID_WAR_GOALS = border/raze/vassalize/plunder).
+  They are **dormant**: zero references in `game.js`/`ui.js`. (Basic declareWar/makePeace *are* wired
+  via the UI War/Peace buttons; the goal/terms/treasury layer is not.)
+- **Cognition order/hold state** — `src/sim/agent.js` gained `path`/`pathCursor`, `holdX`/`holdY`,
+  `orderState`, `setOrder()`/`clearOrder()`; `brain.js` forward pass refactored with reusable scratch
+  buffers, documented bit-identical (evolution unchanged). Landed, partially exercised by movement.
+
+## Design directions (specs only — no gameplay code yet)
+- `ECONOMY_DESIGN.md` (#6) — things cost currency + founded cities have ongoing needs.
+- `AGENT_LIFE_DESIGN.md` (#7) — the "Free Guy" principle: agents with feelings/hunger/community.
+- `GRAPHICS_3D_DESIGN.md` (#9) — WebGL2 true-3D renderer; every car/citizen a real mind.
+- `SPRINT_PLAN.md` — the sprint backlog and sequencing.
+
+## Tracking
+- **CI**: `.github/workflows/ci.yml` runs `node test/headless.mjs` (the life-persists + evolution
+  invariant) on every push/PR to main; non-zero exit blocks regressions. Currently GREEN.
+- **GitHub issues #1–#9** are the source of truth for what shipped vs. what's open:
+  - **CLOSED**: #1 (Found reachable), #2 (Found reasons), #4 (render perf ~29x).
+  - **OPEN**: #3 (real-play marches still fail, coupled to #8), #5 (discoverability), #6 (economy
+    depth, spec only), #7 (living agents, spec only), **#8 (P0 — survival/fail-state, the #1 priority)**,
+    #9 (3D renderer, direction locked + local spike).
 
 ## Docs (the design spine)
-`GOAL.md` · `DESIGN.md` · `FEATURES.md` (WorldBox×Civ6) · `MECHANICS.md` (needs/resources/
-refinement/borders/vehicles) · `GAME_RULES.md` (scales/war/decision-space) · `TECH_TREE_DESIGN.md`
-(Civ6-grounded two-tree) · `ARCHITECTURE.md` (department model + contracts).
-
-## Next (per task board)
-Core mechanics wave (needs · resources · refinement · territory/borders · vehicles) → expand NN
-I/O to the new mechanics → Statecraft (governance/war/diplomacy, symmetric human/AI) → Frontend
-overhaul (graphics/UI/animation + nation-mode UX + tool info) → tech.js Civ6 revision.
-
-## Department file ownership (parallel-safe)
-- COGNITION: sim/brain.js, sim/cognition.js
-- FRONTEND: render/*, css/*, ui visuals
-- STATECRAFT: sim/politics.js, sim/diplomacy.js, game/governance.js, data/lore.js
-- CORE MECHANICS: sim/world.js, resources.js, needs.js, territory.js, settlement.js, tech.js, culture.js, vehicles.js
-- INTEGRATOR (Eli): sim/sim.js, game/game.js + all contracts
+`GOAL.md` · `DESIGN.md` · `FEATURES.md` · `MECHANICS.md` · `GAME_RULES.md` · `TECH_TREE_DESIGN.md` ·
+`ARCHITECTURE.md` · `ECONOMY_DESIGN.md` · `AGENT_LIFE_DESIGN.md` · `GRAPHICS_3D_DESIGN.md` ·
+`SPRINT_PLAN.md`. Per-step history in `CHANGELOG.md`; outside-in playtest in `BETA_REPORT.md`.

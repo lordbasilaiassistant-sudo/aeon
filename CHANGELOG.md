@@ -3,6 +3,55 @@
 Newest first. Timestamps are local (America/New_York). Kept per drlor's request to
 timestamp work for velocity tracking without losing quality.
 
+## 2026-06-13 — Sprint 1 (verbs + perf + process)
+A focused sprint to make the core verbs reachable and the build run smoothly, tracked as GitHub issues #1–#9.
+Honest framing: perf, found, and pathfinding-wiring landed; the survival/fail-state loop (#8) is still the
+headline gap — the game is closer to "plays as a game" but NOT there yet. (Recon graded the pre-sprint build
+4.5/10; this sprint did not re-grade — see remaining gaps below.)
+
+- **SHIPPED — FOUND reachable (#1, CLOSED)** — `sim/territory.js` `TREASURY_RESERVE = 12`: auto border-
+  expansion only spends gold SURPLUS above the 12 floor, so a young nation banks past the 10g found cost
+  instead of being stuck at 0–2 gold forever (gold reaches ~12 by ~year 3). Verified on the live Pages
+  build (~28.6 gold). Commit d672faa (Fixes #1).
+- **SHIPPED — FOUND reasons (#2, CLOSED)** — settlement min-spacing relaxed 8 → 5 tiles
+  (`sim/settlement.js` `FOUND_MIN_SPACE = 5`); `settleSys.lastFoundReason` (water/too_close/occupied) now
+  set on `foundAt()` and surfaced in the `game.js` toast so a rejected found-spot explains itself.
+  Commit d672faa (Fixes #2).
+- **SHIPPED — MOVE pathfinding WIRED (#3, still OPEN)** — `sim/pathfind.js` (flow-field, exports
+  buildField/stepFrom) imported into `sim/sim.js` and used in the order block for foot units
+  (vehicle === 0), replacing the old 6-angle deflector. An ordered foot unit now routes around
+  water/mountains and ARRIVES in isolation (probe 48.6 → 1.2 tiles). Committed as Refs #3 in d672faa —
+  issue intentionally LEFT OPEN because real-play long marches still fail (coupled to #8 starvation), so
+  command does not fully FEEL good yet.
+- **SHIPPED — PERF ~29× (#4, CLOSED)** — `render/` got viewport culling + LOD + particle thinning +
+  dpr clamp + an auto quality governor (`_applyQuality('auto')`). Render at zoom 8.2 fell ~33.9ms →
+  ~1.2ms/frame (~29×); verified live (~6.8ms at zoom 8, ~2200 agents). Fixes the GitHub Pages load
+  bottleneck. Commit d672faa (Fixes #4).
+- **SHIPPED — CI + issue-tracked process** — GitHub Actions (`.github/workflows/ci.yml`) runs the headless
+  "life persists + evolves" invariant (`node test/headless.mjs`) on every push/PR to main and exits non-zero
+  on regression; `package.json` adds `npm test` + `npm run serve`. Currently GREEN (pop 3200, gen 27).
+  Work is now tracked as GitHub issues #1–#9. Commit 87a13d6.
+- **LANDED (dormant — not yet wired to UI/AI)** — statecraft war-GOAL/peace-TERMS/treasury-lever layer:
+  `game/governance.js` + `sim/diplomacy.js` gained VALID_WAR_GOALS {border,raze,vassalize,plunder} +
+  setWarGoal/warStatus/warTerms/setTreasuryFocus/setWarRally and _wars/_peace records. These have ZERO
+  references in game.js/ui.js yet (basic declareWar/makePeace buttons remain the only live war controls).
+  Cognition: `sim/agent.js` gained order/hold state (path/pathCursor, holdX/holdY, orderState, setOrder/
+  clearOrder); `sim/brain.js` forward pass refactored onto reusable scratch buffers — documented bit-
+  identical, evolution unchanged. Landed in d672faa.
+- **DESIGN ONLY (specs written, no gameplay code)** — `ECONOMY_DESIGN.md` (#6 things cost currency + cities
+  have needs), `AGENT_LIFE_DESIGN.md` (#7 the "Free Guy" principle — agents with feelings/hunger/community),
+  `GRAPHICS_3D_DESIGN.md` (#9 WebGL2 true-3D, Citystate-referenced; direction locked in commit f0d77a2),
+  `SPRINT_PLAN.md`. (#9 also has an uncommitted local WebGL2 spike in the working tree — NOT shipped.)
+- **STILL BROKEN / NEXT (honest)** —
+  - **#8 (P0, OPEN) — the headline gap.** The player nation passively COLLAPSES (pop ~52 → 26 by year 30,
+    trending to extinction) and there is NO game-over/defeat screen (the cull exempts isPlayer; no
+    failstate/end-screen code exists). Also MARCH-SURVIVE: ordered units do NOT forage/rest mid-march, so
+    a long march runs them down and stalls (a 3-soldier army ordered 35 tiles closed only ~28% in real
+    play). Pathfinding is correct in isolation; the survival/order coupling is the broken part. This blocks
+    both the command verb feeling good AND the game being winnable/losable.
+  - **#5 (P1, OPEN) — command/found modes are not discoverable** (silent toggles, no banner/cursor/coach-
+    mark). Untouched this sprint.
+
 ## 2026-06-07
 - **18:11 EDT** — PLAYABILITY + PUBLISH (solo). PACE: 1× was 30 ticks/sec (frantic) → now 6/sec (calm,
   Civ-watchable), speeds 1–5× = 6–30/sec. ARMY COMMAND: nations set a war-rally; soldiers (warrior/ranger)

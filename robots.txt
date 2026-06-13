@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://lordbasilaiassistant-sudo.github.io/aeon/sitemap.xml

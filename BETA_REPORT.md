@@ -185,3 +185,117 @@ forces engage or a city you own/attack changes hands (the `conquest` event alrea
 **Stop building new systems. Connect the five dangling wires (move, group, found, conquer, fail-state),
 then make the existing levers legible. Every fix above is a connection or a readout, not a new
 subsystem — the engine is already here.**
+
+---
+
+## Sprint 1 resolution (2026-06-13)
+
+_This addendum is appended to the original 2026-06-07 report (above) — the report stays as the
+historical baseline. Below, each numbered item from the Group A/B/C fix list is marked **DONE**,
+**PARTIAL**, or **STILL OPEN** against what actually shipped in Sprint 1, verified against `git log`
+(`d672faa`, `87a13d6`, `f0d77a2`), `gh issue list`, and the code. Stay honest: the verbs got closer,
+but **the headline gap — the fail-state / player-survival loop (#8) — is still open.** AEON is still
+early._
+
+The original report framed the whole thing as "five dangling wires." Sprint 1 reconnected three of
+them cleanly (found, perf, the pathfinding half of move), left two genuinely open (the survival/
+fail-state loop, discoverability), and only wrote specs for the Group B economy/agent depth.
+
+### GROUP A — make the verbs controllable
+
+- **A1 — Persistent orders + real pathfinding → PARTIAL.** (issue **#3, still OPEN**; commit
+  `d672faa`, `Refs #3`.) The pathfinding half is **DONE**: `src/sim/pathfind.js` (flow-field,
+  `buildField`/`stepFrom`) is wired into the `src/sim/sim.js` order block for foot units, replacing
+  the old greedy 6-angle velocity-reflector. `src/sim/agent.js` gained the persistent-order plumbing
+  the report asked for (`path`/`pathCursor`, `holdX`/`holdY`, `orderState`, `setOrder()`/
+  `clearOrder()`). An **isolated** ordered unit now routes around water/mountains and ARRIVES
+  (probe 48.6 → 1.2 tiles). **But it is only PARTIAL** because in *real play* a long march still
+  fails — ordered units don't forage/rest mid-march, so they run down and stall (a 3-soldier army
+  ordered 35 tiles closed only ~28% in 400 ticks). That survival-coupling is tracked in **#8**, which
+  is why #3 was deliberately left OPEN. Command does **not** yet FEEL good.
+
+- **A2 — Persistent, one-click-selectable army → STILL OPEN.** No sticky-soldier-role or standing
+  `selectArmy()` work shipped this sprint. `assignRoles()` re-rolling who is a soldier each year is
+  unchanged. (Earlier playability commits — `2208c46` minimap + unit command, `ae191d8` drag-select —
+  predate this report and are not Sprint 1.)
+
+- **A3 — Real "Found City" verb / treasury reachable / placement feedback → DONE.**
+  (issues **#1 and #2, both CLOSED**; commit `d672faa`, `Fixes #1`, `Fixes #2`.) `src/sim/territory.js`
+  line 15 adds `TREASURY_RESERVE = 12`; auto border-expansion now only spends the gold **surplus**
+  above that floor (line 39), so a young nation banks past the 10g found cost instead of being stuck
+  at 0–2 gold forever (verified ~28.6 gold on the live Pages build). Founding placement now explains
+  itself: `src/sim/settlement.js` relaxed min-spacing from 8 → 5 tiles (`FOUND_MIN_SPACE = 5`) and
+  sets `lastFoundReason` (`water` / `occupied` / `too_close`), which `src/game/game.js` (line ~271)
+  surfaces in a toast. This closes the report's "founding silently fails / has no validity feedback"
+  complaint.
+
+- **A4 — Make command/found modes DISCOVERABLE → STILL OPEN.** (issue **#5, OPEN**.) Untouched this
+  sprint — the modes are still silent toggles with no persistent banner, cursor change, or coach-mark.
+  This is the report's "single biggest reason testers never found the working path," and it remains a
+  real barrier even though the underlying found verb now works.
+
+- **A5 — Conquest reachable + war has a result → PARTIAL (mostly DORMANT).** The war-GOAL closure model
+  the report asked for **landed in code** (`d672faa`): `src/game/governance.js` + `src/sim/diplomacy.js`
+  gained `VALID_WAR_GOALS {border, raze, vassalize, plunder}`, `setWarGoal` / `warStatus` / `warTerms`
+  / `setTreasuryFocus` / `setWarRally`, and `_wars`/`_peace` records (attacker/defender/goal/kills).
+  **But that layer is DORMANT — it has zero references in `game.js`/`ui.js`, so it is not wired to any
+  UI or AI turn.** Only the basic `declareWar`/`makePeace` buttons are live (ui.js). And conquest is
+  not yet reliably *reachable* in real play, because reaching the enemy depends on A1/#8 (armies still
+  don't complete the march). So: APIs built, war-stakes/peace-terms readout not yet surfaced, wartime
+  breed-cap not done.
+
+### GROUP B — make decisions meaningful
+
+- **B6 — Player-nation viability + a real fail state → STILL OPEN. This is the headline gap.**
+  (issue **#8, OPEN, P0** — the #1 next priority.) The player nation still passively COLLAPSES
+  (pop ~52 → 26 by year 30, trending toward extinction), the cull still exempts `isPlayer`, and there
+  is still **no defeat/victory screen** — no FAILSTATE/ENDSCREEN code exists yet (recon fail-state
+  1.5/10). The report's core "the game both wins itself and can't be lost in a way that ends" verdict
+  is **still true.** This blocks both the command verb feeling good and the game being winnable/losable.
+
+- **B7 — Player build queue with functional buildings → STILL OPEN (spec only).** (issue **#7**.)
+  No build-queue or functional-building code shipped. `AGENT_LIFE_DESIGN.md` (the "Free Guy" living-
+  agents direction) was written, but it is a design doc only — zero gameplay code.
+
+- **B8 — Directable economy + legible policy levers → STILL OPEN (spec only).** (issue **#6**.)
+  No gather-priority method, no per-lever quantified HUD readout shipped. `ECONOMY_DESIGN.md` (things
+  cost currency + cities have ongoing needs) was written as a spec only.
+
+- **B9 — Rebalance tech so research is a live choice → STILL OPEN.** The `sqrt(pop)*0.11/yr` gain
+  formula and early-tech costs were not touched this sprint, and the Research tab still shows no
+  "next unlock in N years" ETA. (Note: the unrelated top-left Research/Civic *banners* in `207d49f`
+  predate Sprint 1 and do not change the tech math.)
+
+### GROUP C — polish (legibility, fairness, teaching)
+
+- **C10 — Combat & siege readability → STILL OPEN.** No health bars, army-strength readout, siege
+  marker, or conquest toast-for-the-player shipped this sprint.
+- **Un-hide the survival dock / tactical verb slice / interactive tutorial → STILL OPEN.** Not done.
+- **Doc honesty → IN PROGRESS (this addendum + the matching STATUS.md / CHANGELOG.md refresh).**
+
+### Sprint 1 also shipped (not on the original A/B/C list)
+
+- **PERF / GitHub Pages bottleneck → DONE.** (issue **#4, CLOSED**; commit `d672faa`, `Fixes #4`.)
+  `src/render/renderer.js` adds viewport culling, a dpr/quality governor (`_applyQuality('auto')`),
+  a renderScale clamp, and LOD/particle thinning. Render at zoom 8.2 fell ~33.9ms → ~1.17ms/frame
+  (~29×); verified ~6.8ms at zoom 8 with 2200 agents on the live build. This fixes the heavy load
+  on weak / high-dpr devices the report flagged as the Pages blocker.
+- **CI invariant gate → DONE.** (commit `87a13d6`.) `.github/workflows/ci.yml` runs
+  `node test/headless.mjs` on every push/PR to `main` and exits non-zero on regression;
+  `package.json` adds `test` and `serve` scripts. The "life persists + evolves" invariant is
+  currently GREEN (pop 3200, evolution gen 27).
+- **3D renderer direction → LOCKED (spec + uncommitted local spike only).** (issue **#9, OPEN**;
+  commit `f0d77a2` locked `GRAPHICS_3D_DESIGN.md` to WebGL2 / Citystate-referenced.) Honest status:
+  the committed artifact is the design doc. A real WebGL2 spike (`src/render/gl3d.js`, `src/render/
+  iso25.js`) exists in the working tree but is **untracked, never committed, never wired into
+  `renderer.js`, and not shipped** — do not treat it as live.
+
+### Net verdict vs. the original 2–3/10
+
+Sprint 1 moved three wires from "dangling" to "connected" — **found** (reachable + explains
+rejections), **perf** (the Pages blocker is gone, ~29×), and the **pathfinding** half of **move**
+(arrives in isolation) — plus a CI safety net. That is real progress against the original beta
+verdict. But the two verbs a strategy player feels most are **not yet closed**: **move** doesn't
+survive a real march, and there is still **no way to win or lose** (#8). So while the engine and the
+found verb improved, the game still isn't something you can decisively win or lose — **the fail-state /
+survival loop (#8) is the single headline gap blocking the next jump in "plays as a game."** Still early.

@@ -43,6 +43,39 @@ trade, worship, and war over land. It's **WorldBox meets Civilization**, with a 
 - **A world that breathes** — day/night, seasons of weather, shimmering water, drifting clouds,
   chimney smoke, creatures that walk, haul loads and breathe.
 
+## Status & roadmap
+
+AEON is **early** and under active development — the simulation runs, but the *game* around it is
+still coming together. Be skeptical of anything that sounds finished; here's the honest state.
+
+**Landed in Sprint 1 (2026-06-13):**
+- **Found-a-City is now reachable** — a nation banks enough gold to actually pay the found cost,
+  and rejected tiles now explain *why* (too close / water / occupied) instead of silently failing.
+- **Ordered foot units pathfind** — a flow-field routes them around water and mountains; an isolated
+  unit now arrives at its target instead of stalling on the first obstacle.
+- **~29× faster rendering** — viewport culling, level-of-detail, and a quality/dpr governor took a
+  heavy frame from ~34 ms down to ~1 ms in the probe (fixes the slow GitHub Pages load on high-dpr
+  devices).
+
+**Known broken / next up (tracked as GitHub issues):**
+- **The player nation passively declines** and there is **no win/defeat screen yet** — the core
+  survival loop and fail-state are the headline gap (#8, P0).
+- **Long marches don't finish in real play** — ordered units don't forage or rest mid-march, so they
+  run down before arriving even though the pathfinding itself is correct (#8, #3).
+- **Command / Found modes aren't discoverable** — they're silent toggles with no banner or cursor
+  cue (#5).
+
+**Planned directions (designed, not built — see the design docs):**
+- **Deeper economy** — actions cost currency and founded cities carry ongoing needs (#6,
+  `ECONOMY_DESIGN.md`).
+- **Living agents ("Free Guy" principle)** — feelings, hunger, community and personal behavior, not
+  just survival drives (#7, `AGENT_LIFE_DESIGN.md`).
+- **A true-3D WebGL2 renderer** — direction is locked and a local spike exists, but it is **not wired
+  in or shipped** (#9, `GRAPHICS_3D_DESIGN.md`).
+
+A GitHub Actions check runs the headless "life persists & evolves" invariant on every push, and all
+work is tracked as GitHub issues (#1–#9) with a `SPRINT_PLAN.md`.
+
 ## Run it
 
 It's plain ES-module JavaScript — **no build step, no dependencies.**
@@ -50,6 +83,9 @@ It's plain ES-module JavaScript — **no build step, no dependencies.**
 ```bash
 # any static server works; this repo ships a tiny zero-dep one:
 node serve.mjs        # → http://localhost:8123
+
+# run the headless invariant (life persists & evolves) — same check CI runs:
+npm test              # → node test/headless.mjs
 ```
 
 Or just open `index.html` through any static file server (ES modules need http, not `file://`).

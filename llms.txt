@@ -1,0 +1,24 @@
+# AEON
+
+> AEON is a free, open-source, browser-based god-game and civilization simulator where every creature is a real, evolving neural network. It is a fusion of WorldBox (open-ended god sandbox) and Civ (deep civilization progression). Unlike city-builders whose citizens are crowd-simulated, in AEON every person has its own tiny neural-network brain that mutates and evolves across generations — nobody is scripted.
+
+## What makes AEON unique
+
+- Every creature is driven by a real artificial neural network (artificial life / alife).
+- Brains mutate and evolve across generations via genetic algorithm — emergent, unscripted behavior.
+- Two modes: **Survival** (lead one people/nation through exploration, settling, research, trade, diplomacy and war — the Civ way, no divine powers) and **Creative** (the divine hand — raise mountains, carve seas, grow forests, spawn life, smite — the WorldBox way).
+- Runs 100% in the browser. No install, no servers, no accounts. Local-only and offline — nothing is sent anywhere.
+
+## Technology
+
+- JavaScript, HTML5 Canvas (WebGL 3D rendering is in progress, not yet shipped).
+- Zero-dependency, no build step. Open source under the MIT license.
+
+## Genre & keywords
+
+god game, civilization simulator, artificial life, alife, neural network game, genetic algorithm, evolution simulator, emergent gameplay, agent-based simulation, sandbox, indie game, WorldBox-like, Civ-like.
+
+## Key links
+
+- Play now (live, GitHub Pages): https://lordbasilaiassistant-sudo.github.io/aeon/
+- Source code (GitHub): https://github.com/lordbasilaiassistant-sudo/aeon
