@@ -1,0 +1,13 @@
+{
+  "name": "aeon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AEON — a god-game/civ-sim where every creature is an evolving neural network. Local-only, zero-dependency, no build step.",
+  "homepage": "https://lordbasilaiassistant-sudo.github.io/aeon/",
+  "scripts": {
+    "test": "node test/headless.mjs",
+    "serve": "node serve.mjs"
+  },
+  "license": "MIT"
+}

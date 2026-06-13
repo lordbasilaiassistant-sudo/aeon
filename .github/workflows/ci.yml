@@ -1,0 +1,23 @@
+name: CI
+
+# Impeccable-debugging backstop: every push/PR runs the AEON invariant
+# (the world must keep LIVING and EVOLVING). No dependencies, no build step —
+# the headless sim test is the gate. It exits non-zero on regression.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  invariant:
+    name: Headless invariant — life persists + evolves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run headless sim test
+        run: node test/headless.mjs

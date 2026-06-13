@@ -58,4 +58,7 @@ const stable = popHistory.slice(-3).every((p) => p > 5);
 console.log(`\nLIFE PERSISTS: ${survived ? 'PASS' : 'FAIL'}`);
 console.log(`EVOLUTION (gens>=5): ${evolved ? 'PASS' : 'FAIL'}  (reached gen ${sim.maxGen})`);
 console.log(`POPULATION STABLE late-game: ${stable ? 'PASS' : 'FAIL'}`);
-console.log(survived && evolved && stable ? '\n✅ ALL PASS — the world lives and evolves.' : '\n❌ needs tuning.');
+const ok = survived && evolved && stable;
+console.log(ok ? '\n✅ ALL PASS — the world lives and evolves.' : '\n❌ needs tuning.');
+// CI gate: exit non-zero on regression so GitHub Actions catches it.
+process.exit(ok ? 0 : 1);
