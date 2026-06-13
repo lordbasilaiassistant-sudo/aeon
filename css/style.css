@@ -17,7 +17,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 body { user-select: none; -webkit-user-select: none; touch-action: none; }
 .hidden { display: none !important; }
 
-#game { position: fixed; inset: 0; display: block; cursor: crosshair; }
+/* The render canvas. Its backing store may be downscaled on the low quality
+   tier (renderer.js clamps dpr / applies renderScale) then stretched to this CSS
+   box by the compositor. image-rendering:auto keeps that upscale smooth (not
+   harshly aliased); at dpr=1 / high tier backing store == CSS box so it's crisp.
+   will-change:transform hints the browser to give the canvas its own layer. */
+#game { position: fixed; inset: 0; display: block; cursor: crosshair;
+  image-rendering: auto; will-change: transform; }
 
 /* ---------- loading ---------- */
 #loading {

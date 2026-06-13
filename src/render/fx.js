@@ -9,9 +9,19 @@ export class FX {
     this.shakeX = 0; this.shakeY = 0;
     this.flash = 0;       // full-screen flash 0..1
     this.flashColor = '255,255,255';
+    // Quality tier set by the renderer ('low' | 'high'). On 'low' we emit fewer
+    // particles per burst so weak/high-dpr devices spend far less fill on juice.
+    // Capped so the particle array can't grow unbounded on weak hardware either.
+    this.quality = 'high';
+    this._maxParticles = 1400;
   }
 
+  // particle budget per burst (0..1) — thinned on the low quality tier
+  get _pScale() { return this.quality === 'low' ? 0.5 : 1; }
+
   burst(x, y, color, n = 14, spd = 2.2, life = 30) {
+    n = Math.max(1, Math.round(n * this._pScale));
+    if (this.particles.length > this._maxParticles) return;  // hard cap, weak HW guard
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const s = spd * (0.3 + Math.random());

@@ -218,12 +218,44 @@ function _fallbackColors(hue) {
   return _fallback[i];
 }
 
+// ---- visible-agent index buffer (reused every frame; no per-frame alloc) ----
+// drawAgents fills this with the indices of alive, on-screen agents in ONE pass,
+// so the shadow + body passes iterate only what's visible (not the whole pool).
+// At high zoom most agents are off-screen, so this is the single biggest win.
+let _visIdx = new Int32Array(4096);
+function _ensureVis(n) {
+  if (_visIdx.length < n) {
+    let s = _visIdx.length; while (s < n) s <<= 1;
+    _visIdx = new Int32Array(s);
+  }
+  return _visIdx;
+}
+// Parallel key buffer for the cheap batched tier: packs (colorBucket) per visible
+// agent so we can flush rects grouped by fillStyle (group state changes, no
+// per-agent string building). Key = bucket*2 + predFlag, 0..11 (6 light × 2).
+let _visKey = new Int16Array(4096);
+function _ensureKey(n) {
+  if (_visKey.length < n) {
+    let s = _visKey.length; while (s < n) s <<= 1;
+    _visKey = new Int16Array(s);
+  }
+  return _visKey;
+}
+
 /**
  * Draw readable agents as little PEOPLE: head + torso + a hint of legs/arms,
  * shaded by tribe hue + vitality, with a subtle 2-frame walk shuffle off the
  * shared gait clock. Predators (high diet) tint redder. Detail rises with zoom
  * (specks when far, full figures up close); offscreen culled. Consumes
  * a.lastAct (one-frame eat/attack flash) like renderer.drawAgents did.
+ *
+ * PERF: one viewport-AABB cull pass builds a visible-index buffer, then the
+ * draw tier is chosen from zoom AND on-screen count. When zoomed out OR many
+ * agents are visible, every creature collapses to a cheap 1-2px rect batched by
+ * tribe/vitality colour (grouped fillStyle changes; zero per-agent gradients,
+ * shadowBlur or string building). The rich shaded figure (shadow + facing +
+ * limbs + signal ring) is only paid when zoomed in AND few are on screen — the
+ * close-zoom look the player actually sees is preserved exactly.
  */
 export function drawAgents(ctx, cam, sim) {
   const A = sim.pool.agents;
@@ -232,37 +264,85 @@ export function drawAgents(ctx, cam, sim) {
   const offx = vw * 0.5 - cam.x * zoom;
   const offy = vh * 0.5 - cam.y * zoom;
   const lut = _tribeColors(sim);
-  const far = zoom < 2.6;       // tiny squares, no shadow
-  const near = zoom >= 6;       // facing nub / signal ring / act flash / arms
   const rScale = zoom * 0.17;
 
-  // batched drop-shadow pass at the FEET (grounds the little figures)
-  if (!far) {
-    ctx.fillStyle = SHADOW_COL;
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const a = A[i];
-      if (!a.alive) continue;
-      const sx = a.x * zoom + offx, sy = a.y * zoom + offy;
-      let r = rScale * a.size; if (r < 0.9) r = 0.9;
-      const m = r * 3 + 2;
-      if (sx < -m || sy < -m || sx > vw + m || sy > vh + m) continue;
-      const cy = sy + r * 1.45, rx = r * 0.85, ry = r * 0.34;
-      ctx.moveTo(sx + rx, cy);
-      ctx.ellipse(sx, cy, rx, ry, 0, 0, TAU);
-    }
-    ctx.fill();
+  // 1) VIEWPORT CULL — world-space AABB (+margin) computed ONCE, then a single
+  // pass over the pool collects alive, on-screen agents into the index buffer.
+  // Margin is the worst-case sprite half-extent in world tiles (~3.5 * size).
+  const marginPx = rScale * 3.5 * 2 + 4;
+  const wx0 = (-marginPx - offx) / zoom, wx1 = (vw + marginPx - offx) / zoom;
+  const wy0 = (-marginPx - offy) / zoom, wy1 = (vh + marginPx - offy) / zoom;
+  const vis = _ensureVis(n);
+  let nv = 0;
+  for (let i = 0; i < n; i++) {
+    const a = A[i];
+    if (!a.alive) { a.lastAct = 0; continue; }
+    const ax = a.x, ay = a.y;
+    if (ax < wx0 || ax > wx1 || ay < wy0 || ay > wy1) { a.lastAct = 0; continue; }
+    vis[nv++] = i;
   }
+  if (nv === 0) return;
+
+  // 2) LEVEL OF DETAIL — tier from zoom AND on-screen count. Either zoomed out,
+  // or a crowd on screen, drops to the cheap batched-rect tier (no shadows, no
+  // ellipses/arcs). Rich creatures only when zoomed in AND the crowd is small.
+  const far = zoom < 2.6;
+  const cheap = far || zoom < 5 || nv > 700;   // batched specks, no figures
+  const near = !cheap && zoom >= 6;            // facing/ring/arms/eyes
+
+  // -------------------------------------------------- CHEAP TIER (batched rects)
+  // Group by colour bucket so fillStyle changes once per bucket, not per agent.
+  if (cheap) {
+    const key = _ensureKey(nv);
+    for (let k = 0; k < nv; k++) {
+      const a = A[vis[k]];
+      const pred = a.diet > 0.55 ? 1 : 0;
+      let bi = (a.energy * 0.7 + a.health * 0.3) * 5 | 0;
+      if (bi < 0) bi = 0; else if (bi > 5) bi = 5;
+      key[k] = bi * 2 + pred;
+    }
+    // 12 vitality groups (6 light × normal/pred). Iterating group-major keeps
+    // agents of the same brightness/predator class contiguous, so within a group
+    // we only re-assign fillStyle when the *tribe colour string* actually changes
+    // (cheap identity compare on the cached LUT string — no per-agent building).
+    const minR = zoom < 2 ? 1 : 1.2;
+    let cur = null;
+    for (let g = 0; g < 12; g++) {
+      const bi = g >> 1, pred = g & 1;
+      for (let k = 0; k < nv; k++) {
+        if (key[k] !== g) continue;
+        const a = A[vis[k]];
+        const col = sim.tribes.get(a.tribeId) ? lut.get(a.tribeId) : _fallbackColors(a.hue);
+        const body = (pred ? col.fillPred : col.fill)[bi];
+        if (body !== cur) { ctx.fillStyle = body; cur = body; }
+        const sx = a.x * zoom + offx, sy = a.y * zoom + offy;
+        let r = rScale * a.size; if (r < minR) r = minR;
+        ctx.fillRect(sx - r, sy - r, r * 1.8, r * 1.8);
+      }
+    }
+    return;   // lastAct already cleared during cull
+  }
+
+  // -------------------------------------------------- RICH TIER (close + sparse)
+  // batched drop-shadow pass at the FEET (grounds the little figures)
+  ctx.fillStyle = SHADOW_COL;
+  ctx.beginPath();
+  for (let k = 0; k < nv; k++) {
+    const a = A[vis[k]];
+    const sx = a.x * zoom + offx, sy = a.y * zoom + offy;
+    let r = rScale * a.size; if (r < 0.9) r = 0.9;
+    const cy = sy + r * 1.45, rx = r * 0.85, ry = r * 0.34;
+    ctx.moveTo(sx + rx, cy);
+    ctx.ellipse(sx, cy, rx, ry, 0, 0, TAU);
+  }
+  ctx.fill();
 
   // body pass — each agent is a little CREATURE (head + body + limbs), never a dot
   const walkPhase = (sim.tick % 24) / 24;   // shared gait clock (2-frame shuffle)
-  for (let i = 0; i < n; i++) {
-    const a = A[i];
-    if (!a.alive) continue;
+  for (let k = 0; k < nv; k++) {
+    const a = A[vis[k]];
     const sx = a.x * zoom + offx, sy = a.y * zoom + offy;
     let r = rScale * a.size; if (r < 0.8) r = 0.8;
-    const m = r * 3 + 2;
-    if (sx < -m || sy < -m || sx > vw + m || sy > vh + m) { a.lastAct = 0; continue; }
 
     const tr = sim.tribes.get(a.tribeId);
     const col = tr ? lut.get(a.tribeId) : _fallbackColors(a.hue);
@@ -270,13 +350,6 @@ export function drawAgents(ctx, cam, sim) {
     let bi = (a.energy * 0.7 + a.health * 0.3) * 5 | 0;
     if (bi < 0) bi = 0; else if (bi > 5) bi = 5;
     const body = (pred ? col.fillPred : col.fill)[bi];
-
-    if (far) {                       // zoomed way out: a population speck (not a UI dot)
-      ctx.fillStyle = body;
-      ctx.fillRect(sx - r, sy - r, r * 1.8, r * 1.8);
-      a.lastAct = 0;
-      continue;
-    }
 
     // facing + a 2-frame gait (legs swing opposite, torso bobs) while moving
     const sp = Math.hypot(a.vx, a.vy);
@@ -573,20 +646,34 @@ export function drawSettlements(ctx, cam, sim) {
     ctx.textAlign = 'center';
     const fs = zoom * 0.7; ctx.font = `${(fs < 9 ? 9 : fs > 16 ? 16 : fs) | 0}px ui-sans-serif, system-ui, sans-serif`;
   }
+  // VIEWPORT CULL — world-space AABB (+margin in tiles) computed once; the
+  // per-settlement pixel test below stays as the precise gate.
+  const marginT = 48 / zoom + 2;
+  const wx0 = -offx / zoom - marginT, wx1 = (vw - offx) / zoom + marginT;
+  const wy0 = -offy / zoom - marginT, wy1 = (vh - offy) / zoom + marginT;
+  // count visible first so heavy per-settlement smoke can be skipped in crowds
+  let nvis = 0;
+  for (let i = 0; i < S.length; i++) {
+    const s = S[i];
+    if (s.x < wx0 || s.x > wx1 || s.y < wy0 || s.y > wy1) continue;
+    nvis++;
+  }
+  const smoke = zoom > 4.5 && nvis <= 120;   // chimney plumes only when not a crowd
   const tribes = sim.tribes;
   for (let i = 0; i < S.length; i++) {
     const s = S[i];
+    if (s.x < wx0 || s.x > wx1 || s.y < wy0 || s.y > wy1) continue;
     const sx = (s.x + 0.5) * zoom + offx;
     const sy = (s.y + 0.5) * zoom + offy;
-    if (sx < -48 || sy < -48 || sx > vw + 48 || sy > vh + 48) continue;
     const tier = _tierNum(s);
     const tr = tribes && tribes.get ? tribes.get(s.tribeId) : null;
     const hue = tr ? tr.hue : 205;
     const era = (tr && tr.tech && typeof tr.tech.era === 'number') ? tr.tech.era : 0;
     const sid = (s.id != null ? s.id : i) | 0;
     _drawSettlement(ctx, sx, sy, zoom, tier, s, hue, era, tick, sid);
-    // chimney smoke — a living city breathes (more plumes for bigger tiers)
-    if (tier >= 1 && zoom > 4.5) {
+    // chimney smoke — a living city breathes (more plumes for bigger tiers).
+    // Skipped in dense crowds of settlements (the `smoke` LOD gate) to stay cheap.
+    if (tier >= 1 && smoke) {
       const plumes = tier + 1;
       for (let q = 0; q < plumes; q++) {
         const ph = ((tick * 0.02 + sid * 0.37 + q * 0.31) % 1);

@@ -8,6 +8,11 @@
 // nearest city to decide sieges; expansion stamps only unclaimed land.
 const YEAR = 60;
 const MAXR_BY_TIER = [9, 13, 18, 24]; // how far a camp/village/town/city can ever reach
+// Treasury reserve: auto-expansion will NOT spend a nation's gold below this floor,
+// so a young nation can actually save up the ~10 gold needed to FOUND a city instead
+// of having every coin instantly burned on border creep. Borders still grow for free
+// (baseline 0.5/yr) and pay-to-push only kicks in once a nation is flush past the floor.
+export const TREASURY_RESERVE = 12;
 
 export class Territory {
   constructor(world) {
@@ -28,8 +33,12 @@ export class Territory {
       if (!tr || tr.members === 0) continue;
       if (s.claimR === undefined) s.claimR = 3;
       const maxR = MAXR_BY_TIER[s.tier] || 9;
-      let grow = 0.5;                                   // baseline border creep / yr
-      if (tr.gold > 0) { const spend = Math.min(tr.gold, 4); tr.gold -= spend; grow += spend * 0.45; } // GOLD claims land
+      let grow = 0.5;                                   // baseline border creep / yr (FREE)
+      // Pay-to-push: only spend the SURPLUS above the treasury reserve, never dip below
+      // the floor — this lets a nation bank enough gold to FOUND a city.
+      const surplus = tr.gold - TREASURY_RESERVE;
+      if (surplus > 0) { const spend = Math.min(surplus, 4); tr.gold -= spend; grow += spend * 0.45; } // GOLD claims land
+
       if (s.claimR < maxR) s.claimR = Math.min(maxR, s.claimR + grow);
       this._stampUnowned(W, owner, s.x, s.y, s.claimR, s.tribeId);
       s._def = 0; s._atk = null;

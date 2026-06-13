@@ -6,6 +6,7 @@ Thumbs.db
 # editor / OS cruft
 .vscode/
 .idea/
+.serena/
 # scratch workflow / playtest scripts (not part of the game)
 test/_*.js
 test/_*.mjs

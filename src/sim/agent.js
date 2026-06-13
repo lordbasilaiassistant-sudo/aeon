@@ -28,6 +28,11 @@ export class Agent {
     this.hydration = 1;                     // thirst need (0..1)
     this.vehicle = 0;                       // 0 none · 1 boat (crosses water) · 2 plane (crosses any)
     this.ordX = 0; this.ordY = 0; this.ordered = false; // player move/attack order (RTS command)
+    // MOVE-fix order/hold state: a commanded unit is a persistent, path-following unit.
+    // The integrator (sim.js) advances pathCursor/consumes the path; we own the fields + defaults.
+    this.path = null; this.pathCursor = 0;   // waypoint list {x,y}[] + index of current target
+    this.holdX = null; this.holdY = null;     // hold-position anchor (null = not holding)
+    this.orderState = null;                   // null | "move" | "hold"
     // cached expressed traits
     this.size = 1; this.speed = 1; this.metabolism = 1; this.fertility = 1;
     this.aggression = 0.5; this.vision = 4; this.diet = 0; this.resilience = 0.5;
@@ -50,6 +55,7 @@ export class Agent {
     this.hydration = 1;     // thirst need (0..1); drink at water or die
     this.vehicle = 0;       // crafted craft: 0 none, 1 boat, 2 plane
     this.ordered = false; this.ordX = 0; this.ordY = 0; // direct player order
+    this.clearOrder(); // recycled pooled agents must not carry a dead unit's path/hold
     this.carryType = -1; this.carryAmt = 0;
     this.expressTraits();
     this.energy = 0.6;
@@ -81,9 +87,44 @@ export class Agent {
     return this.size * (0.5 + this.aggression) * (0.4 + this.health) * (0.3 + this.diet);
   }
 
+  // ---- player order / hold state (MOVE-fix) ------------------------------
+  // Make a unit a persistent path-follower. Also lights the legacy `ordered`
+  // flag (with ordX/ordY = first waypoint) so the existing integrator path in
+  // sim.js drives it even before it's taught to walk the full waypoint list.
+  setOrder(path) {
+    this.path = (path && path.length) ? path : null;
+    this.pathCursor = 0;
+    this.orderState = this.path ? 'move' : null;
+    this.holdX = null; this.holdY = null;
+    if (this.path) {
+      const wp = this.path[0];
+      this.ordered = true; this.ordX = wp.x; this.ordY = wp.y;
+    }
+    return this;
+  }
+
+  // Park a unit at a spot and have it stay put (guard/garrison).
+  setHold(x, y) {
+    this.holdX = x; this.holdY = y;
+    this.orderState = 'hold';
+    this.path = null; this.pathCursor = 0;
+    this.ordered = true; this.ordX = x; this.ordY = y; // legacy march-to-spot, then holds
+    return this;
+  }
+
+  // Drop every order: free-willed again.
+  clearOrder() {
+    this.path = null; this.pathCursor = 0;
+    this.holdX = null; this.holdY = null;
+    this.orderState = null;
+    this.ordered = false;
+    return this;
+  }
+
   kill() {
     this.alive = false;
     this.genome = null;
+    this.clearOrder(); // dead/recycled agents must not leak a path or hold anchor
   }
 }
 

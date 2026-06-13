@@ -14,6 +14,7 @@ import { Resources, RES_NAME } from './resources.js';
 import { Civics } from './civics.js';
 import { Anthropology } from './anthropology.js';
 import { Animals } from './animals.js';
+import { buildField, stepFrom } from './pathfind.js';
 import {
   think, breed, clone, randomGenome, distance,
   N_IN, N_OUT, SENSE, ACT,
@@ -464,18 +465,24 @@ export class Sim {
     if (a.ordered && a !== this.controlled) {
       const odx = a.ordX - a.x, ody = a.ordY - a.y;
       const od = Math.hypot(odx, ody);
-      if (od < 1.6) { a.ordered = false; }
+      if (od < 1.4) { a.ordered = false; a.orderState = null; }   // arrived
       else {
-        let dx = odx / od, dy = ody / od;
-        // lightweight pathfinding: if the way ahead is blocked (and we have no boat),
-        // deflect toward the nearest passable heading so units round coastlines/cliffs.
-        if (a.vehicle === 0 && !W.walkable(a.x + dx * 1.8, a.y + dy * 1.8)) {
-          const ANG = [0.7, -0.7, 1.4, -1.4, 2.2, -2.2];
-          for (let z = 0; z < ANG.length; z++) {
-            const c = Math.cos(ANG[z]), s = Math.sin(ANG[z]);
-            const nx = dx * c - dy * s, ny = dx * s + dy * c;
-            if (W.walkable(a.x + nx * 1.8, a.y + ny * 1.8)) { dx = nx; dy = ny; break; }
+        let dx = odx / od, dy = ody / od;   // default heading (boats/planes, or fallback)
+        // FLOW-FIELD PATHFINDING: foot units route AROUND water/mountains toward the
+        // FINAL target. The field is BFS-flooded from the target and cached per-target
+        // (4s TTL) — a whole box-selected army sharing one destination reuses one field,
+        // so this is ~O(1) per unit/tick after the first build. Replaces the old greedy
+        // 6-angle deflector that made units stall ~17 tiles short of the target (#3).
+        if (a.vehicle === 0) {
+          const field = buildField(W, a.ordX | 0, a.ordY | 0);
+          const step = stepFrom(field, a.x | 0, a.y | 0);
+          if (step) {
+            const sx = (step.x + 0.5) - a.x, sy = (step.y + 0.5) - a.y;
+            const sl = Math.hypot(sx, sy) || 1; dx = sx / sl; dy = sy / sl;
           }
+          // step === null => already adjacent/at target OR genuinely unreachable on foot
+          // (e.g. across open sea without a boat): keep the straight heading so a unit
+          // nudges the shore rather than freezing; it simply cannot cross water on foot.
         }
         mx = dx * 1.4; my = dy * 1.4; // hard override — it obeys
       }

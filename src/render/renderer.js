@@ -10,7 +10,15 @@ export class Renderer {
     this.sim = sim;
     this.cam = camera;
     this.fx = fx;
-    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+
+    // ---- device-pixel / quality tier (self-contained perf governor) ----
+    // RENDER is the measured bottleneck; on dpr 2-3 phones we were paying 4-9x
+    // the pixel cost for no visible gain. We clamp the effective devicePixelRatio
+    // and (on weak hardware) drop a quality tier that skips the bloom post pass
+    // and thins particle effects. Crisp at dpr=1, never blurry: renderScale only
+    // ever shrinks the backing store, the CSS box stays 1:1 with layout pixels.
+    this._quality = 'auto';
+    this._applyQuality('auto');   // sets this.qTier, this.renderScale, this.dpr
 
     // offscreen baked terrain (1px per tile)
     this.terrain = document.createElement('canvas');
@@ -30,11 +38,65 @@ export class Renderer {
   }
 
   resize(w, h) {
-    this.canvas.width = w * this.dpr;
-    this.canvas.height = h * this.dpr;
+    // backing store = CSS pixels * effective dpr (dpr already folds in renderScale)
+    this._cssW = w; this._cssH = h;
+    this.canvas.width = Math.max(1, Math.round(w * this.dpr));
+    this.canvas.height = Math.max(1, Math.round(h * this.dpr));
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
+    // camera works in CSS/layout pixels; the dpr scale is applied on the ctx in
+    // render(), so the world->screen transform is unaffected by the clamp.
     this.cam.resize(w, h);
+  }
+
+  // ---- quality tier ----------------------------------------------------------
+  // Pick an internal tier from hardware hints (cores / memory / coarse-pointer).
+  // 'low'  => no bloom post, thinner particles, dpr capped harder (saves the most
+  //           pixels on the phones/laptops that were dropping to single-digit fps).
+  // 'high' => full bloom + dpr up to 1.5.  'auto' picks one of these at runtime.
+  // Public + no-arg-safe so the integrator can later wire a UI toggle:
+  //   renderer.setQuality('auto' | 'low' | 'high')
+  setQuality(level) {
+    this._applyQuality(level || 'auto');
+    // re-size the backing store so the new dpr/renderScale takes effect now
+    if (this._cssW) this.resize(this._cssW, this._cssH);
+    return this._quality;
+  }
+  getQuality() { return this._quality; }
+
+  _applyQuality(level) {
+    if (level !== 'low' && level !== 'high' && level !== 'auto') level = 'auto';
+    this._quality = level;
+    const tier = level === 'auto' ? this._detectTier() : level;
+    this.qTier = tier;
+    const rawDpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    if (tier === 'low') {
+      // cap hard + an internal downscale so huge-dpr phones stop over-rendering
+      this.renderScale = 0.85;
+      this.dpr = Math.min(rawDpr, 1.25) * this.renderScale;
+    } else {
+      this.renderScale = 1;
+      this.dpr = Math.min(rawDpr, 1.5);
+    }
+    // never go below 1 device px per CSS px (keeps it crisp at dpr=1)
+    if (this.dpr < 1) this.dpr = 1;
+    this.bloom = tier !== 'low';
+    if (this.fx) this.fx.quality = tier;   // fx.js thins particles on 'low'
+  }
+
+  // Heuristic: weak if few cores OR little memory OR a coarse (touch) pointer on
+  // a high-dpr panel. Conservative — only the clearly-weak machines drop to low.
+  _detectTier() {
+    if (typeof navigator === 'undefined') return 'high';
+    const cores = navigator.hardwareConcurrency || 4;
+    const mem = navigator.deviceMemory || 4;   // GB, Chrome-only; undefined => assume ok
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    let coarse = false;
+    try { coarse = typeof window !== 'undefined' && window.matchMedia &&
+      window.matchMedia('(pointer: coarse)').matches; } catch (e) {}
+    if (cores <= 4 || mem <= 4) return 'low';
+    if (coarse && dpr >= 2) return 'low';      // high-res phone/tablet
+    return 'high';
   }
 
   bakeTerrain() {
@@ -73,7 +135,7 @@ export class Renderer {
     this.drawGhost();
     this.drawFX();
     Visuals.drawClouds(this.ctx, this.cam, this.sim);   // drifting atmosphere over the world
-    Visuals.applyPost(this.ctx, this.cam, { timeOfDay: (this.sim.tick % 1440) / 1440, fx: this.fx });
+    Visuals.applyPost(this.ctx, this.cam, { timeOfDay: (this.sim.tick % 1440) / 1440, fx: this.fx, bloom: this.bloom });
 
     ctx.restore();
     this.drawMinimap();

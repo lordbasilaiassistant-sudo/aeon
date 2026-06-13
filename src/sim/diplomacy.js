@@ -38,6 +38,9 @@ const RIVAL_THRESHOLD  = 0.55;   // pressure that drifts neutral AI pairs to riv
 const FRIENDLY_THRESHOLD = 0.15; // pressure that cools rival AI pairs back to neutral
 
 const VALID_STANCES = { ally: 1, neutral: 1, rival: 1, war: 1 };
+// war STAKES — what the aggressor is fighting to achieve (legible closure model).
+const VALID_WAR_GOALS = { border: 1, raze: 1, vassalize: 1, plunder: 1 };
+const DEFAULT_WAR_GOAL = 'border';
 
 function idOf(x) { return (x && typeof x === 'object') ? x.id : x; }
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
@@ -54,7 +57,8 @@ export class Diplomacy {
   constructor() {
     this._stance = new Map();    // pairKey -> 'ally'|'rival'|'war'  (neutral omitted)
     this._grievance = new Map(); // dirKey  -> number 0..GRIEVANCE_MAX
-    this._wars = new Map();      // pairKey -> { since, exhaust }
+    this._wars = new Map();      // pairKey -> { since, exhaust, attacker, defender, goal, kills }
+    this._peace = new Map();     // pairKey -> last concluded peace terms (for the chronicle)
     this._scratch = [];          // reused tribe snapshot (no per-year garbage)
   }
 
@@ -108,6 +112,56 @@ export class Diplomacy {
     const idA = idOf(a), idB = idOf(b);
     if (idA === idB) return false;
     return this._stance.get(pairKey(idA, idB)) === 'war';
+  }
+
+  // --- active-war enumeration + per-war kill tallies ------------------------
+  // Every ACTIVE war `tribeId` is fighting, with the foe, this nation's kills,
+  // the foe's kills, and the year it began. Powers governance.warsOf and the
+  // integrator's wartime breed-cap (so a nation winning a war can out-breed its
+  // foe and actually finish a conquest). Pure read — no rng, no mutation.
+  // Returns [] when the tribe has no wars (the common case), so callers may
+  // treat a non-empty result as "this nation is at war".
+  activeWars(sim, tribeId) {
+    const id = idOf(tribeId);
+    const out = [];
+    if (id == null) return out;
+    for (const [key, war] of this._wars) {
+      if (!war) continue;
+      const a = Math.floor(key / MUL), b = key % MUL;
+      let foe;
+      if (a === id) foe = b;
+      else if (b === id) foe = a;
+      else continue;
+      // a stance flip can outpace _wars cleanup mid-year; trust the stance map.
+      if (this._stance.get(key) !== 'war') continue;
+      // kills are stored directionally on the war record, keyed by tribe id, so
+      // the same record serves both belligerents symmetrically.
+      const myKills = (war.kills && war.kills[id]) || 0;
+      const theirKills = (war.kills && war.kills[foe]) || 0;
+      out.push({
+        foe, kills: myKills, theirKills, since: war.since || 0,
+        attacker: war.attacker, defender: war.defender,
+        goal: war.goal || DEFAULT_WAR_GOAL,
+        isAttacker: war.attacker === id,
+      });
+    }
+    return out;
+  }
+
+  // INTEGRATOR HOOK — combat resolution calls this when an agent of killerTribeId
+  // slays an agent of victimTribeId. Increments the killer's tally on the shared
+  // war record IFF the two nations are actually at war (kills outside a declared
+  // war don't count toward war progress). Returns true if a war kill was recorded.
+  recordKill(sim, killerTribeId, victimTribeId) {
+    const k = idOf(killerTribeId), v = idOf(victimTribeId);
+    if (k == null || v == null || k === v) return false;
+    const key = pairKey(k, v);
+    if (this._stance.get(key) !== 'war') return false; // not a war kill
+    const war = this._wars.get(key);
+    if (!war) return false;
+    if (!war.kills) war.kills = {};
+    war.kills[k] = (war.kills[k] || 0) + 1;
+    return true;
   }
 
   // hot-path foe test: at-war OR rival. Single Map lookup.
@@ -189,37 +243,84 @@ export class Diplomacy {
     if (stance === prev) return false;
     if (stance === 'neutral') this._stance.delete(key);
     else this._stance.set(key, stance);
-    // war-record bookkeeping (powers exhaustion / auto-peace)
+    // war-record bookkeeping (powers exhaustion / auto-peace). The record carries
+    // STAKES (attacker/defender/goal) so a war has a legible aim & closure; the
+    // ids default to the pair's lower/higher id and are corrected by declareWar,
+    // which alone knows who actually opened hostilities.
     if (stance === 'war' && prev !== 'war') {
       const year = sim && sim.year ? sim.year() : 0;
-      this._wars.set(key, { since: year, exhaust: 0 });
+      this._wars.set(key, { since: year, exhaust: 0, attacker: idA, defender: idB, goal: DEFAULT_WAR_GOAL });
     } else if (prev === 'war' && stance !== 'war') {
       this._wars.delete(key);
     }
     return true;
   }
 
-  declareWar(sim, a, b) {
+  // set/replace the aggressor's war aim on an active war record. `goal` is one of
+  // VALID_WAR_GOALS; unknown goals are ignored. Returns true if a war was stamped.
+  setWarGoal(sim, a, b, goal) {
+    const key = pairKey(idOf(a), idOf(b));
+    const war = this._wars.get(key);
+    if (!war || !VALID_WAR_GOALS[goal]) return false;
+    war.goal = goal;
+    return true;
+  }
+
+  declareWar(sim, a, b, goal) {
     const A = this._resolve(sim, a), B = this._resolve(sim, b);
     if (!A || !B || A === B) return false;
     if (this._stance.get(pairKey(A.id, B.id)) === 'war') return false;
     this.setStance(sim, A.id, B.id, 'war');
+    // stamp the true belligerent roles + the war aim on the fresh record
+    const war = this._wars.get(pairKey(A.id, B.id));
+    if (war) { war.attacker = A.id; war.defender = B.id; war.goal = VALID_WAR_GOALS[goal] ? goal : DEFAULT_WAR_GOAL; }
     this.addGrievance(sim, A.id, B.id, DECLARE_GRIEVANCE);
     this.addGrievance(sim, B.id, A.id, DECLARE_GRIEVANCE * 0.5);
     if (sim.emit) sim.emit('war', `${A.name} declares war on ${B.name}`, A.capitalX, A.capitalY, A.hue);
     return true;
   }
 
+  // last concluded peace per pair, for the UI / chronicle (overwritten each war).
+  // { attacker, defender, goal, killsA, killsB, victor, since, until }.
+  lastPeaceTerms(sim, a, b) {
+    if (!this._peace) return null;
+    return this._peace.get(pairKey(idOf(a), idOf(b))) || null;
+  }
+
   makePeace(sim, a, b) {
     const A = this._resolve(sim, a), B = this._resolve(sim, b);
     if (!A || !B || A === B) return false;
-    const s = this._stance.get(pairKey(A.id, B.id));
+    const key = pairKey(A.id, B.id);
+    const s = this._stance.get(key);
     if (s !== 'war' && s !== 'rival') return false;
+    // capture the closing terms BEFORE setStance deletes the war record
+    const war = this._wars.get(key);
+    let terms = null;
+    if (war) {
+      const kA = (war.kills && war.kills[A.id]) || 0;
+      const kB = (war.kills && war.kills[B.id]) || 0;
+      const victor = kA > kB ? A.id : (kB > kA ? B.id : null); // null = stalemate
+      terms = {
+        attacker: war.attacker, defender: war.defender, goal: war.goal || DEFAULT_WAR_GOAL,
+        killsA: war.attacker === A.id ? kA : kB,
+        killsB: war.attacker === A.id ? kB : kA,
+        victor, since: war.since || 0, until: sim && sim.year ? sim.year() : 0,
+      };
+      if (!this._peace) this._peace = new Map();
+      this._peace.set(key, terms);
+    }
     this.setStance(sim, A.id, B.id, 'neutral');
     // war-weariness buys lasting calm: shed most accumulated grievance
     this._softenGrievance(A.id, B.id, 0.4);
     this._softenGrievance(B.id, A.id, 0.4);
-    if (sim.emit) sim.emit('peace', `${A.name} and ${B.name} make peace`, A.capitalX, A.capitalY, A.hue);
+    if (sim.emit) {
+      let msg = `${A.name} and ${B.name} make peace`;
+      if (terms && terms.victor != null) {
+        const win = terms.victor === A.id ? A : B;
+        msg = `${A.name} and ${B.name} make peace — ${win.name} prevail`;
+      }
+      sim.emit('peace', msg, A.capitalX, A.capitalY, A.hue);
+    }
     return true;
   }
 
@@ -303,7 +404,7 @@ export class Diplomacy {
     // 4) drop entries that reference tribes that no longer exist
     for (const k of Array.from(this._stance.keys())) {
       const a = Math.floor(k / MUL), b = k % MUL;
-      if (!sim.tribes.has(a) || !sim.tribes.has(b)) { this._stance.delete(k); this._wars.delete(k); }
+      if (!sim.tribes.has(a) || !sim.tribes.has(b)) { this._stance.delete(k); this._wars.delete(k); if (this._peace) this._peace.delete(k); }
     }
     for (const k of Array.from(this._grievance.keys())) {
       const a = Math.floor(k / MUL), b = k % MUL;

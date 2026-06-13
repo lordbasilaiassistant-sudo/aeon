@@ -257,14 +257,25 @@ export class Game {
   }
   foundCityAt(wx, wy) {
     this.foundMode = false;
-    if (!this.playerTribe || this.playerTribe.gold < 10) return;
+    if (!this.playerTribe) return;
+    if (this.playerTribe.gold < 10) {
+      this.ui.toast({ type: 'extinct', msg: `Need 10 gold to found a city (have ${Math.floor(this.playerTribe.gold)}).` });
+      return;
+    }
     const s = this.sim.settleSys.foundAt(this.sim, this.playerTribe.id, wx, wy);
     if (s) {
       this.playerTribe.gold -= 10;
       this.fx.ring(s.x, s.y, `hsl(${this.playerTribe.hue},80%,65%)`, 6, 28);
       this.fx.text(s.x, s.y, '🏛 ' + s.name, '#cfe');
     } else {
-      this.ui.toast({ type: 'extinct', msg: "Can't found here — needs land, clear of other cities." });
+      // surface WHY the tile was rejected (coremech sets settleSys.lastFoundReason) so the
+      // player learns the rule instead of getting a vague "can't found here". (#2)
+      const why = this.sim.settleSys.lastFoundReason;
+      const msg = why === 'water' ? "Can't found on water — pick walkable land."
+        : why === 'too_close' ? 'Too close to an existing city — spread out.'
+        : why === 'occupied' ? 'Invalid tile — pick open, walkable land.'
+        : "Can't found here — needs open, walkable land clear of other cities.";
+      this.ui.toast({ type: 'extinct', msg });
     }
   }
 

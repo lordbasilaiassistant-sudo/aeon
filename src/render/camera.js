@@ -1,5 +1,11 @@
 // Smooth camera. The zoom is the bridge between god altitude and ground level —
 // one continuous space (research/02: two modes = two altitudes of one camera).
+//
+// COORD CONTRACT (perf/dpr): the camera works entirely in CSS / layout pixels
+// (viewW/viewH are the CSS canvas size passed by Renderer.resize). The renderer
+// applies the device-pixel-ratio as a ctx.scale(dpr,dpr) before drawing, so the
+// dpr clamp / renderScale in renderer.js never touches this transform — zoom is
+// always "CSS pixels per world tile". Do not multiply by dpr here.
 export class Camera {
   constructor(world, viewW, viewH) {
     this.world = world;

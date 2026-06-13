@@ -25,6 +25,7 @@ const WAR_THRESHOLD = 0.9;    // base pressure to declare war (lowered by aggres
 const ALLY_PRESSURE = 0.12;   // mutual pressure under which a nation seeks allies
 const MAX_SETTLEMENTS = 6;    // = settlement.js MAX_PER_TRIBE (expansion ceiling)
 const RALLY_TTL = 4;          // years a peaceful rally point lingers before clearing
+const BASE_TREASURY_UPLIFT = 0.6; // +60% gold income at full mercantile focus (integrator contract)
 
 const POLICY_KEYS = { aggression: 1, expansion: 1, breed: 1, research: 1 };
 
@@ -188,9 +189,82 @@ export class Governance {
 
   // diplomacy levers — delegate to the shared per-pair store.
   setStance(sim, a, b, stance) { return sim.diplomacy ? sim.diplomacy.setStance(sim, a, b, stance) : false; }
-  declareWar(sim, a, b) { return sim.diplomacy ? sim.diplomacy.declareWar(sim, a, b) : false; }
+  // declareWar keeps its (sim,a,b) signature; an OPTIONAL 4th arg names the war
+  // GOAL (border|raze|vassalize|plunder) — the stakes recorded on the war record.
+  declareWar(sim, a, b, goal) { return sim.diplomacy ? sim.diplomacy.declareWar(sim, a, b, goal) : false; }
   makePeace(sim, a, b) { return sim.diplomacy ? sim.diplomacy.makePeace(sim, a, b) : false; }
   proposeAlliance(sim, a, b) { return sim.diplomacy ? sim.diplomacy.proposeAlliance(sim, a, b) : false; }
+
+  // ===================== WAR GOALS + CLOSURE MODEL =======================
+  // The legible STAKES around a war: who started it, what they want, and the
+  // running kill tally on each side. Human and AI read the SAME records.
+
+  // set/replace the aggressor's aim on an active war (border|raze|vassalize|plunder).
+  setWarGoal(sim, a, b, goal) { return sim.diplomacy ? sim.diplomacy.setWarGoal(sim, a, b, goal) : false; }
+
+  // The active war record between two nations, or null if they are not at war.
+  // Shape: { attacker, defender, goal, startedYear, killsA, killsB } where
+  // killsA = the ATTACKER's kills and killsB = the DEFENDER's kills (so it reads
+  // the same regardless of argument order). Drives the UI war panel.
+  warStatus(sim, aId, bId) {
+    const dip = sim.diplomacy;
+    if (!dip || typeof dip.activeWars !== 'function') return null;
+    const a = (aId && typeof aId === 'object') ? aId.id : aId;
+    const b = (bId && typeof bId === 'object') ? bId.id : bId;
+    if (a == null || b == null || a === b) return null;
+    const wars = dip.activeWars(sim, a);
+    for (let i = 0; i < wars.length; i++) {
+      const w = wars[i];
+      if (w.foe !== b) continue;
+      // w.kills/theirKills are from `a`'s perspective; re-key by belligerent role
+      const killsAtt = w.isAttacker ? w.kills : w.theirKills;
+      const killsDef = w.isAttacker ? w.theirKills : w.kills;
+      return {
+        attacker: w.attacker, defender: w.defender, goal: w.goal,
+        startedYear: w.since, killsA: killsAtt, killsB: killsDef,
+      };
+    }
+    return null;
+  }
+
+  // NOTE: warsOf(sim, tribe) — the active-war list for the HUD + integrator breed-cap
+  // — lives further down (the canonical, enriched version), now carrying goal /
+  // startedYear / isAttacker. Kept single-source there to avoid a shadowed method.
+
+  // The concluded terms of the last war this pair fought (null if none on record).
+  // { attacker, defender, goal, killsA, killsB, victor, since, until }.
+  warTerms(sim, aId, bId) {
+    const dip = sim.diplomacy;
+    return (dip && typeof dip.lastPeaceTerms === 'function') ? dip.lastPeaceTerms(sim, aId, bId) : null;
+  }
+
+  // ===================== TREASURY / INCOME LEVER =========================
+  // A nation may CHOOSE to prioritize gold (mercantile focus). The intent is
+  // stored on the tribe as tribe.econFocus (0 = off, 1 = full focus); the
+  // integrator reads it in sim.js to bias the yearly gold income. We provide the
+  // lever + the intent + a legible estimate; we do NOT write the gold ourselves.
+  setTreasuryFocus(sim, tribe, on) {
+    if (!tribe) return 0;
+    // accept a boolean toggle OR an explicit 0..1 intensity
+    let v;
+    if (typeof on === 'number') v = clamp01(on);
+    else v = on ? 1 : 0;
+    tribe.econFocus = v;
+    return v;
+  }
+
+  // legible "expected +N gold/yr" for the treasury UI. Mirrors the integrator's
+  // base income (members*0.04 + settlements*1.5) and folds in the econFocus
+  // uplift the integrator applies, so the number the player sees matches reality.
+  // BASE_TREASURY_UPLIFT is the bonus fraction at full focus (econFocus === 1).
+  incomeEstimate(sim, tribe) {
+    if (!tribe || tribe.members === 0) return 0;
+    const settles = (sim.settleSys && typeof sim.settleSys.countOf === 'function')
+      ? sim.settleSys.countOf(tribe.id) : 0;
+    const base = tribe.members * 0.04 + settles * 1.5;
+    const focus = (typeof tribe.econFocus === 'number') ? clamp01(tribe.econFocus) : 0;
+    return base * (1 + focus * BASE_TREASURY_UPLIFT);
+  }
 
   // ---- TRADE: exchange gold / resources by mutual agreement -----------------
   _tval(deal) { const W = { gold: 1, wood: 0.6, stone: 0.8, ore: 1.5, metal: 3 }; let v = 0; for (const k in deal) v += (deal[k] || 0) * (W[k] || 0); return v; }
@@ -242,6 +316,39 @@ export class Governance {
         if (sim.emit) sim.emit('destiny', `${tr.name} achieve their destiny: ${d.name}`, tr.capitalX, tr.capitalY, tr.hue);
       }
     }
+  }
+
+  // ACTIVE WARS this nation is fighting, enriched for the war HUD: foe identity,
+  // our/their kill tallies, years elapsed, and who is ahead. Symmetric — the human
+  // (war panel) and the AI (war assessment) read the same shape. Empty when at peace.
+  warsOf(sim, tribe) {
+    const out = [];
+    if (tribe == null) return out;
+    const d = sim.diplomacy;
+    if (!d || typeof d.activeWars !== 'function') return out;
+    // accept a tribe object OR a bare id
+    const myId = (typeof tribe === 'object') ? tribe.id : tribe;
+    const meTr = (typeof tribe === 'object') ? tribe : sim.tribes.get(myId);
+    const year = sim.year ? sim.year() : 0;
+    const raw = d.activeWars(sim, myId);
+    for (let i = 0; i < raw.length; i++) {
+      const w = raw[i];
+      const foe = sim.tribes.get(w.foe);
+      if (!foe || foe.members === 0) continue; // foe gone — war is effectively over
+      const net = w.kills - w.theirKills;
+      out.push({
+        foe: foe.id, name: foe.name, hue: foe.hue,
+        kills: w.kills, theirKills: w.theirKills,
+        net, winning: net > 0,
+        // war STAKES + CLOSURE (the legible aim & who opened hostilities)
+        goal: w.goal, startedYear: w.since, isAttacker: w.isAttacker,
+        years: Math.max(0, year - w.since),
+        pressure: meTr ? d.warPressure(sim, meTr, foe) : 0,
+        theirPressure: meTr ? d.warPressure(sim, foe, meTr) : 0,
+      });
+    }
+    out.sort((a, b) => b.theirKills - a.theirKills); // bloodiest front first
+    return out;
   }
 
   // relations snapshot toward every other living nation (for the diplomacy HUD).
@@ -473,6 +580,80 @@ export class Governance {
       else if (tribe.policy.research > 0.6) pick = 'enlightened';
       else if (tribe.policy.expansion > 0.5) pick = 'builders';
       this.setDestiny(sim, tribe, pick);
+    }
+  }
+
+  // ===================== PLAYER SAFETY NET (autopilot) ===================
+  // A LIGHT, opt-in caretaker the integrator calls for a player who enables it
+  // (e.g. tribe.autopilot === true), so a passive nation does not silently die.
+  // It runs the SAME levers a human would but stays DEFENSIVE: it grows, teches,
+  // defends, sues for a losing peace, and seeks alliances — it never opens a new
+  // war or pursues conquest on the player's behalf. Skips a tribe NOT flagged for
+  // autopilot only if called directly without a flag; the integrator gates the call.
+  autopilotTurn(sim, tribe) {
+    if (!tribe || tribe.members === 0) return;
+    this._ensureRng(sim);
+    this.ensurePolicy(tribe);
+    const r = this._rng;
+    const dip = sim.diplomacy;
+    const year = sim.year ? sim.year() : 0;
+
+    const settles = (sim.settleSys && typeof sim.settleSys.countOf === 'function') ? sim.settleSys.countOf(tribe.id) : 0;
+    const capacity = 30 + settles * 30;
+    const crowd = Math.max(0, tribe.members / capacity - 1);
+    const era = eraOf(tribe);
+    const neigh = dip ? dip.neighborsOf(sim, tribe) : [];
+
+    // current war (defensive focus) + a peaceful comparable ally candidate
+    let warTarget = null, warP = -Infinity, allyTarget = null, allyP = Infinity, maxEnemyEra = era;
+    for (let i = 0; i < neigh.length; i++) {
+      const nb = neigh[i];
+      const ne = eraOf(nb); if (ne > maxEnemyEra) maxEnemyEra = ne;
+      const p = dip ? dip.warPressure(sim, tribe, nb) : 0;
+      if (p < allyP) { allyP = p; allyTarget = nb; }
+      if (dip && dip.atWar(sim, tribe, nb) && p > warP) { warP = p; warTarget = nb; }
+    }
+    const eraGap = maxEnemyEra - era;
+
+    // --- policies: grow when there's room, restrain when crowded; always tech;
+    //     stay calm (defensive) — autopilot never plays the aggressor. ---------
+    const breed = crowd > 0.2 ? -0.3 - clamp01(crowd) * 0.5 : 0.5 - tribe.members / 300;
+    const expansion = (crowd > 0.1 ? 0.5 : 0.1) + (tribe.members < 25 ? -0.4 : 0);
+    // aggression rises only to defend an active war, never to start one
+    const aggression = clamp(warTarget ? 0.3 : -0.2, -1, 1);
+    const research = 0.4 + clamp01(eraGap * 0.25) + (!warTarget && crowd < 0.1 ? 0.2 : 0);
+    this.setPolicy(sim, tribe, 'breed', breed);
+    this.setPolicy(sim, tribe, 'expansion', expansion);
+    this.setPolicy(sim, tribe, 'aggression', aggression);
+    this.setPolicy(sim, tribe, 'research', research);
+
+    // research toward defense if at war, else growth/science
+    const kind = warTarget ? 'combat' : (crowd > 0.2 ? 'growth' : 'science');
+    const goal = this._goalTech(tribe, kind);
+    if (goal) this.prioritizeTech(sim, tribe, goal);
+
+    // --- diplomacy: sue for peace in a losing war; seek a safe alliance -------
+    if (dip) {
+      if (warTarget) {
+        const sA = dip.strength(sim, tribe), sB = dip.strength(sim, warTarget);
+        if (sA / (sA + sB) < 0.5 || tribe.members < 14) dip.makePeace(sim, tribe, warTarget);
+      }
+      if (allyTarget && allyP < ALLY_PRESSURE && !warTarget) {
+        if (dip.stanceBetween(sim, tribe, allyTarget) === 'neutral') dip.proposeAlliance(sim, tribe, allyTarget);
+      }
+    }
+
+    // --- military + expansion: defend at home; expand only when crowded -------
+    if (warTarget) {
+      this.marchArmy(sim, tribe, tribe.capitalX, tribe.capitalY); // hold the home line
+    } else {
+      if (tribe.warRally) this.marchArmy(sim, tribe, null);
+      if (crowd > 0.15 && settles < MAX_SETTLEMENTS) {
+        const spot = this._openLand(sim, tribe, r);
+        if (spot) this.foundSettlement(sim, tribe, spot.x, spot.y);
+      } else if (tribe.rally && typeof tribe.rally.year === 'number' && (year - tribe.rally.year) > RALLY_TTL) {
+        tribe.rally = null;
+      }
     }
   }
 

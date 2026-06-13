@@ -141,25 +141,55 @@ export function distance(a, b) {
 }
 
 // ---- forward pass (hot path) --------------------------------------------
-// Reusable scratch so we don't allocate per-creature per-tick.
+// Reusable scratch so we don't allocate per-creature per-tick. The forward pass
+// is run thousands of times per tick, so it is written to do ZERO allocation and
+// keep the typed arrays in locals (registers) for the inner accumulation loops.
+// The summation ORDER is preserved exactly (strict left-to-right), so optimizing
+// this changes nothing about the result — same weights, same activation, same
+// float-add sequence => bit-identical outputs and unchanged evolution.
 const _hid = new Float32Array(N_HID);
+const _NIN = N_IN; // hoist module consts to locals (avoid TDZ/global lookups in loop)
+const _NHID = N_HID;
+const _NOUT = N_OUT;
+const _WIH = W_IH;
+const _NIN4 = _NIN - (_NIN & 3); // largest multiple of 4 <= N_IN
+const _NHID4 = _NHID - (_NHID & 3);
 
 export function think(genome, input, output) {
   // input: Float32Array(N_IN), output: Float32Array(N_OUT)
+  const g = genome, in_ = input, hid = _hid;
   // layer 1: input -> hidden (tanh)
-  for (let h = 0; h < N_HID; h++) {
+  let base = 0;
+  for (let h = 0; h < _NHID; h++) {
     let sum = 0;
-    const base = h * N_IN;
-    for (let i = 0; i < N_IN; i++) sum += genome[base + i] * input[i];
-    _hid[h] = Math.tanh(sum);
+    let i = 0;
+    // unrolled by 4 — same add order, just fewer loop-condition checks
+    for (; i < _NIN4; i += 4) {
+      const b = base + i;
+      sum += g[b]     * in_[i];
+      sum += g[b + 1] * in_[i + 1];
+      sum += g[b + 2] * in_[i + 2];
+      sum += g[b + 3] * in_[i + 3];
+    }
+    for (; i < _NIN; i++) sum += g[base + i] * in_[i];
+    hid[h] = Math.tanh(sum);
+    base += _NIN;
   }
   // layer 2: hidden -> output (tanh, callers interpret >0 as "do it")
-  const ho = W_IH;
-  for (let o = 0; o < N_OUT; o++) {
+  base = _WIH;
+  for (let o = 0; o < _NOUT; o++) {
     let sum = 0;
-    const base = ho + o * N_HID;
-    for (let h = 0; h < N_HID; h++) sum += genome[base + h] * _hid[h];
+    let h = 0;
+    for (; h < _NHID4; h += 4) {
+      const b = base + h;
+      sum += g[b]     * hid[h];
+      sum += g[b + 1] * hid[h + 1];
+      sum += g[b + 2] * hid[h + 2];
+      sum += g[b + 3] * hid[h + 3];
+    }
+    for (; h < _NHID; h++) sum += g[base + h] * hid[h];
     output[o] = Math.tanh(sum);
+    base += _NHID;
   }
   return output;
 }

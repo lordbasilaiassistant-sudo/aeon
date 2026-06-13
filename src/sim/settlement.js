@@ -27,6 +27,11 @@ const MAX_PER_TRIBE   = 6;    // cap settlements per tribe (bounds work + render
 const DRIFT           = 0.15; // how fast a town re-centers on where its people are
 const MAX_HOMES       = 16;   // cap dwellings so building lists stay bounded
 
+// minimum spacing between a FOUNDED city and any existing settlement. ~5 tiles:
+// a player can plant a second city a few tiles from home, but cities never stack.
+const FOUND_MIN_SPACE  = 5;
+const FOUND_MIN_SPACE2 = FOUND_MIN_SPACE * FOUND_MIN_SPACE;  // 25
+
 const VILLAGE_POP = 18;
 const TOWN_POP    = 38;
 const CITY_POP    = 64;
@@ -112,12 +117,20 @@ export class SettlementSystem {
   foundAt(sim, tribeId, x, y) {
     const W = sim.world;
     const ix = x | 0, iy = y | 0;
-    if (!W.walkable(ix, iy)) return null;
+    this.lastFoundReason = null;                       // cleared on a successful found
+    // walkable() is false on water AND off-map; distinguish so the UI can say why.
+    if (!W.walkable(ix, iy)) {
+      this.lastFoundReason = (W.inBounds(ix, iy) && W.isWater(ix, iy)) ? 'water' : 'occupied';
+      return null;
+    }
     if (!sim.settlements) sim.settlements = [];
     for (let i = 0; i < sim.settlements.length; i++) {
       const s = sim.settlements[i];
       const dx = s.x - x, dy = s.y - y;
-      if (dx * dx + dy * dy < 64) return null;        // too close to an existing town
+      if (dx * dx + dy * dy < FOUND_MIN_SPACE2) {      // too close to an existing town
+        this.lastFoundReason = 'too_close';
+        return null;
+      }
     }
     const tr = sim.tribes.get(tribeId);
     const s = new Settlement(_nextSettlementId++, tribeId, ix + 0.5, iy + 0.5);
