@@ -1,14 +1,16 @@
 # AEON — Current Status
 
-_Last updated: 2026-06-13 (post Sprint 1)_
+_Last updated: 2026-06-14 (end of Day 2)_
 
-## Reality check (drlor): still early — ~5–6/10 "plays as a game"
-Recon graded the pre-Sprint-1 build **4.5/10** on "plays as a game." Sprint 1 (2026-06-13) fixed the
-render bottleneck, made the Found-a-City verb reachable with reasoned rejections, and wired flow-field
-pathfinding into ordered movement. The verbs are closer to feeling good — but the headline gap is still
-open: **the player nation passively collapses and there is no win/lose state**, so AEON is not yet a game
-you can win or lose. This is "systems that exist and a couple of verbs that now work," NOT "a finished game."
-Keep grinding, report plainly.
+## Reality check (drlor): a real leap today — ~6.5–7/10 "plays as a game", aiming S+
+Day 2 turned a flat top-down sim into a **beautiful, animated 3D game you can win or lose and learn to
+play**: a WebGL2 3D world (figures, procedural buildings, day-night) live in-game, an onboarding tutorial
++ universal tooltips, a leader-AI that keeps a hands-off nation alive, and a real fail-state — a
+game-breaking false-defeat bug was caught **on the live build** and fixed. The ECONOMY (items/drops/mines/
+farms/trade) and DEEPER BRAINS (richer senses/acts + recurrent memory) are LANDED but DORMANT: committed,
+headless-green, awaiting their `sim.js` wiring (the first job next session). Still NOT S+: hard-seed
+survival balance is unsolved, the economy + brains aren't switched on yet, and victory/end-screen + audio
++ roads/traffic + mobile polish remain. Keep grinding, report plainly. (Sprint 1 detail is below.)
 
 **AEON** = a browser god-game/civ-sim where every creature is a real, evolving neural network. God +
 nation + avatar agency. Local-only, no servers, open source, zero deps.

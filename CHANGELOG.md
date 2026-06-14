@@ -3,6 +3,38 @@
 Newest first. Timestamps are local (America/New_York). Kept per drlor's request to
 timestamp work for velocity tracking without losing quality.
 
+## 2026-06-14 — Day 2: the game goes 3D, animated, teachable, and savable
+A big push beyond Sprint 1: AEON went from a flat top-down sim to a beautiful, animated 3D game you can
+win or lose and learn to play. Tracked as issues #1–#17. Honest framing — a real leap, but NOT S+ yet:
+the economy + deeper brains are LANDED but DORMANT (sim.js wiring is the next session), hard-seed
+survival balance is unsolved, and victory/end-screen + audio + roads/traffic + polish remain.
+
+- **SHIPPED — WebGL2 3D renderer, live in the game (#9, CLOSED).** A true-3D heightmap-mesh renderer
+  (`Renderer3D`, raw WebGL2, zero-dep) with figures, instanced procedural buildings, nation-border overlay,
+  and raycast picking — wired into the live game behind a Canvas2D fallback + a ◳3D toggle. Tap to select,
+  drag pan, scroll zoom, Shift-drag orbit. ~0.4ms/frame. Commits 44d7ca0 → 0b1469a.
+- **SHIPPED — the 3D world is ANIMATED.** Walk cycles + carry/combat/death poses, drifting cloud shadows,
+  ~5k swaying trees, chimney smoke, a full day→night sun arc (golden hour + lit night windows). Commit 9b4e4bd.
+- **SHIPPED — UX/onboarding so it's obvious how to play (#5, CLOSED).** Universal hover tooltips, a first-time
+  Survival tutorial (leads with the leader/lawgiver control model), legible policy sliders with live effect
+  labels, a Found-banner + gold-gated Found button, and a How-to-Play modal on the ? button. Commit 55b11db.
+- **SHIPPED — LEADER-AI v0 + a real fail-state (#8 progress, #10).** A hands-off player nation is now ruled
+  by a conservative leader-AI (it stands down the moment you legislate), so it no longer passively collapses
+  on most seeds; a real DEFEAT fires when your nation hits 0 souls. Commit ddcbe5d.
+- **FIXED — false "defeat" at Survival start.** `members` reads 0 for one frame after `createPlayerPeople`
+  and the tutorial pauses before the first tick, so the fail-state declared an instant defeat the moment you
+  started a game — and it was LIVE on Pages. Now guarded by `_playerEverLived`; caught by the pushed-build
+  smoke test (the "test what you ship" rule earned its keep). Commit d08cf87.
+- **LANDED (dormant — sim.js wiring next) — the ECONOMY (#11).** `sim/items.js` (item DB + drop tables),
+  ACTIVE mob/animal loot drops, regional resources + buildable mines/quarries/lumber/farms + extraction,
+  production (forge tools/weapons), and surplus↔need inter-nation trade. Commit 51d0a09.
+- **LANDED (dormant — sim.js wiring next) — DEEPER BRAINS (#12).** +13 senses (predator/prey/stamina/danger/
+  kin/home/at-war) + 5 acts (flee/rest/hunt/socialize/seek-water) appended (existing indices intact) + a
+  recurrent memory state. Headless still PASS (gen 16), ~15ms/tick. Commit 2d3ad9d.
+- **PROCESS.** Design north-stars written (CONTROL_MODEL #10, AGENT_LIFE #7, ECONOMY #6, GRAPHICS_3D #9,
+  S+ mission). Issues #1–#17 tracked; #1/#2/#3/#4/#5/#9 closed. CI green throughout. Repo SEO live
+  (description, 20 topics, meta/llms/sitemap). Run as a parallel multi-department studio (disjoint files).
+
 ## 2026-06-13 — Sprint 1 (verbs + perf + process)
 A focused sprint to make the core verbs reachable and the build run smoothly, tracked as GitHub issues #1–#9.
 Honest framing: perf, found, and pathfinding-wiring landed; the survival/fail-state loop (#8) is still the
