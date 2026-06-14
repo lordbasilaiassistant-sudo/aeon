@@ -17,6 +17,7 @@
 import { TECHS, TECH_BY_ID } from '../sim/tech.js';
 import { gene } from '../sim/brain.js';
 import { RNG } from '../core/rng.js';
+import { value as itemValue, isResource, itemsOfType } from '../sim/items.js';
 
 const TAU = Math.PI * 2;
 
@@ -267,7 +268,12 @@ export class Governance {
   }
 
   // ---- TRADE: exchange gold / resources by mutual agreement -----------------
-  _tval(deal) { const W = { gold: 1, wood: 0.6, stone: 0.8, ore: 1.5, metal: 3 }; let v = 0; for (const k in deal) v += (deal[k] || 0) * (W[k] || 0); return v; }
+  // value of a trade bundle, in gold. gold is 1:1; resources/materials fall back
+  // to the items.js economic value() (single source of truth with the market),
+  // so the AI accept-test in proposeTrade and tradeTick's pricing agree. Signature
+  // unchanged. (Legacy weights kept as overrides for the four classic stock keys
+  // so prior trade behaviour is preserved exactly.)
+  _tval(deal) { const W = { gold: 1, wood: 0.6, stone: 0.8, ore: 1.5, metal: 3 }; let v = 0; for (const k in deal) v += (deal[k] || 0) * (k in W ? W[k] : itemValue(k)); return v; }
   _owns(tribe, deal) { for (const k in deal) { const have = k === 'gold' ? (tribe.gold || 0) : ((tribe.stock && tribe.stock[k]) || 0); if (have < deal[k]) return false; } return true; }
   _shift(tribe, deal, sign) { for (const k in deal) { const amt = deal[k] * sign; if (k === 'gold') tribe.gold = (tribe.gold || 0) + amt; else tribe.stock[k] = (tribe.stock[k] || 0) + amt; } }
   // `from` offers `give` and requests `get` from `to`. Executes iff both own their
@@ -286,6 +292,171 @@ export class Governance {
     this._shift(to, get, -1); this._shift(from, get, +1);        // to → from
     if (sim.emit) sim.emit('trade', `${from.name} trades with ${to.name}`, from.capitalX, from.capitalY, from.hue);
     return true;
+  }
+
+  // ================= TRUE ECONOMICS: SURPLUS / NEED / MARKET ================
+  // Nations differ in what their land gives them (regional resources) and what
+  // their tech lets them refine. So each nation carries a SURPLUS of some items
+  // and a NEED for others. Neighbours then trade surplus-for-need at supply/
+  // demand prices (scarcer = pricier), so a resource-poor nation can still get
+  // what it lacks — emergent specialization. Built on proposeTrade/_tval/_owns/
+  // _shift (signatures unchanged); self-gated to once/sim-year via tradeTick.
+
+  // The set of items trade reasons over: the raw resources a nation stockpiles
+  // plus the refined material 'metal' the integrator produces (ore→metal). We
+  // stay on the keys that actually live in tribe.stock so we never invent ghost
+  // inventory; value() prices them, scarcity multiplies at deal time.
+  static _TRADE_ITEMS = (() => {
+    const seen = new Set();
+    const out = [];
+    for (const id of itemsOfType('resource')) if (!seen.has(id)) { seen.add(id); out.push(id); }
+    if (!seen.has('metal')) { seen.add('metal'); out.push('metal'); } // integrator's refined ore
+    return out;
+  })();
+
+  // per-capita target a nation "wants" to hold of an item (a soft demand floor).
+  // Staples (food/wood) are wanted more per head; refined goods less. Scaled by
+  // members so a big nation needs proportionally more before it counts as sated.
+  _targetStock(tribe, id) {
+    const m = tribe.members || 0;
+    let perHead;
+    switch (id) {
+      case 'food':  perHead = 0.6; break;
+      case 'wood':  perHead = 0.4; break;
+      case 'stone': perHead = 0.3; break;
+      case 'ore':   perHead = 0.25; break;
+      case 'metal': perHead = 0.18; break;
+      case 'hide':  perHead = 0.15; break;
+      case 'herbs': perHead = 0.12; break;
+      default:      perHead = 0.2; break;
+    }
+    return 4 + m * perHead; // a small flat base so tiny tribes still trade
+  }
+
+  _held(tribe, id) { return (tribe.stock && tribe.stock[id]) || 0; }
+
+  // SURPLUS: items a nation holds well ABOVE its target — what it can export.
+  // Returns { id: exportableQty } (only positive entries). Keeps a reserve: a
+  // nation never trades away the buffer it wants for itself.
+  surplusOf(sim, tribe) {
+    const out = {};
+    if (!tribe || tribe.members === 0) return out;
+    const items = Governance._TRADE_ITEMS;
+    for (let i = 0; i < items.length; i++) {
+      const id = items[i];
+      const have = this._held(tribe, id);
+      const want = this._targetStock(tribe, id);
+      const extra = have - want * 1.25;        // only the cushion above 125% of target is spare
+      if (extra >= 1) out[id] = Math.floor(extra);
+    }
+    return out;
+  }
+
+  // NEED: items a nation holds BELOW its target — what it wants to import.
+  // Returns { id: deficitQty } (only positive entries).
+  needOf(sim, tribe) {
+    const out = {};
+    if (!tribe || tribe.members === 0) return out;
+    const items = Governance._TRADE_ITEMS;
+    for (let i = 0; i < items.length; i++) {
+      const id = items[i];
+      const have = this._held(tribe, id);
+      const want = this._targetStock(tribe, id);
+      const gap = want - have;
+      if (gap >= 1) out[id] = Math.floor(gap);
+    }
+    return out;
+  }
+
+  // supply/demand price (in gold) a nation puts on ONE unit of an item, from ITS
+  // OWN scarcity: the less it holds vs what it wants, the more it values a unit
+  // (scarcer = pricier); abundance discounts it. Anchored to items.js value().
+  _unitPrice(tribe, id) {
+    const base = itemValue(id) || 0.5;
+    const have = this._held(tribe, id);
+    const want = this._targetStock(tribe, id) || 1;
+    const ratio = have / want;                 // 0 = bare, 1 = sated, >1 = glut
+    // scarcity multiplier in [0.6 .. 2.0]: steep when bare, gentle discount when glutted
+    const mul = clamp(2.0 - 1.4 * clamp01(ratio), 0.6, 2.0);
+    return base * mul;
+  }
+
+  // The mid price two nations settle on for `id`: the seller's (abundant, cheaper)
+  // ask and the buyer's (scarce, dearer) bid meet in the middle. Always > 0.
+  _marketPrice(seller, buyer, id) {
+    const p = (this._unitPrice(seller, id) + this._unitPrice(buyer, id)) * 0.5;
+    return p > 0.1 ? p : 0.1;
+  }
+
+  // Try ONE surplus-for-need exchange: `buyer` pays gold for `qty` of `id` from
+  // `seller`. The price is the scarcity mid, but CLAMPED into the band where the
+  // deal actually clears: it must not exceed what proposeTrade's accept-test
+  // (_tval) says the goods are worth to the buyer (else the buyer-AI refuses),
+  // and it stays >=1. Routes through proposeTrade so the AI gate + war check +
+  // ownership all still guard it, and players are never forced. Returns true iff
+  // the trade executed.
+  _buyFrom(sim, buyer, seller, id, qty) {
+    if (qty < 1) return false;
+    if (this._held(seller, id) < qty) return false;         // seller hasn't the goods
+    let price = Math.round(this._marketPrice(seller, buyer, id) * qty);
+    // ceiling = the buyer-AI's own valuation of the goods (proposeTrade requires
+    // gain >= cost*bar with bar<=1, so a price at/under _tval(goods) always clears).
+    const ceil = Math.floor(this._tval({ [id]: qty }));
+    if (ceil < 1) return false;                             // worthless to the buyer-AI
+    if (price > ceil) price = ceil;
+    if (price < 1) price = 1;
+    if ((buyer.gold || 0) < price) return false;            // buyer can't afford it
+    // buyer GIVES gold, GETS the item; from seller's view that's a value gain, so
+    // proposeTrade(seller offers item, requests gold) lets seller's _tval judge it.
+    return this.proposeTrade(sim, seller, buyer, { [id]: qty }, { gold: price });
+  }
+
+  // ----------------------------- THE MARKET TICK ---------------------------
+  // Integrator calls tradeTick(sim) ONCE per sim-year (after aiTurn, alongside
+  // checkDestinies). For each living nation with unmet needs, it shops its
+  // peaceful neighbours for their biggest matching surplus and buys what it can
+  // afford, dearest-need first. Mutually beneficial: the buyer fills a gap, the
+  // seller turns a glut into gold. O(nations × neighbours × items) per YEAR only.
+  tradeTick(sim) {
+    if (!sim || !sim.tribes) return 0;
+    const dip = sim.diplomacy;
+    let deals = 0;
+    // precompute surplus/need once per nation this year (cheap, yearly)
+    const surplus = new Map(), need = new Map();
+    for (const t of sim.tribes.values()) {
+      if (!t || t.members === 0) continue;
+      surplus.set(t.id, this.surplusOf(sim, t));
+      need.set(t.id, this.needOf(sim, t));
+    }
+    for (const buyer of sim.tribes.values()) {
+      if (!buyer || buyer.members === 0) continue;
+      let myNeed = need.get(buyer.id);
+      if (!myNeed) continue;
+      // address the most valuable shortfall first
+      const wants = Object.keys(myNeed).sort((a, b) => itemValue(b) - itemValue(a));
+      if (!wants.length || (buyer.gold || 0) < 1) continue;
+      const neigh = dip ? dip.neighborsOf(sim, buyer) : [];
+      for (let w = 0; w < wants.length; w++) {
+        const id = wants[w];
+        let stillNeed = myNeed[id];
+        if (stillNeed < 1) continue;
+        for (let n = 0; n < neigh.length && stillNeed >= 1 && (buyer.gold || 0) >= 1; n++) {
+          const seller = neigh[n];
+          if (!seller || seller.members === 0) continue;
+          if (dip && dip.atWar(sim, buyer, seller)) continue;   // no trade with an enemy
+          const sSurp = surplus.get(seller.id);
+          const spare = sSurp ? (sSurp[id] || 0) : 0;
+          if (spare < 1) continue;
+          const qty = Math.min(stillNeed, spare);
+          if (this._buyFrom(sim, buyer, seller, id, qty)) {
+            deals++;
+            stillNeed -= qty;
+            sSurp[id] = spare - qty;                            // seller's glut shrinks
+          }
+        }
+      }
+    }
+    return deals;
   }
 
   // destiny (opt-in goal)

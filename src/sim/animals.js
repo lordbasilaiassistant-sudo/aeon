@@ -6,17 +6,29 @@
 // Deterministic: uses its OWN rng (seeded from the world seed) so animal motion
 // never perturbs the agents' evolution stream — same pattern as culture.js.
 import { RNG } from '../core/rng.js';
+import { rollDrops } from './items.js';
 
 export const ANIMAL = { PREY: 0, PREDATOR: 1 };
+const KIND_NAME = ['prey', 'predator'];     // ANIMAL index -> drop-table kind
 
 const MAX = 420;
 const SIGHT = 7;            // tiles an animal perceives
 const SIGHT2 = SIGHT * SIGHT;
 
+// DROP-ON-DEATH attribution radius: a carcass within this many tiles of one of a
+// nation's settlements is harvested by that nation (its hunters/foragers), and the
+// loot lands in tribe.stock. Beyond any settlement, drops fall to the ground pile.
+const HARVEST_R = 9;
+const HARVEST_R2 = HARVEST_R * HARVEST_R;
+
 export class Animals {
   constructor() {
     this.list = [];          // active animals
     this.rng = null;
+    // GROUND LOOT: drops from animals that died with no nation nearby to harvest
+    // them. A capped pile keyed by item id — claimable later (forage hook) or just
+    // an ambient resource record. Bounded so it can never grow without limit.
+    this.ground = new Map(); // itemId -> qty
   }
 
   spawn(sim, nPrey = 180, nPred = 26) {
@@ -101,6 +113,18 @@ export class Animals {
       this._move(W, a);
     }
 
+    // DROP-ON-DEATH: any animal that just died (from a hunt, starvation, or age)
+    // leaves a carcass. Roll its loot table once (marked with .looted so it's never
+    // double-counted) and bank it — into the nearest nation's stock if a settlement
+    // is within HARVEST_R (its hunters claim the kill), else onto the ground pile.
+    // Cheap: only touches animals flagged dead-this-tick, before they're compacted.
+    for (let i = 0; i < L.length; i++) {
+      const a = L[i];
+      if (a.alive || a.looted) continue;
+      a.looted = true;
+      this._resolveDrops(sim, a);
+    }
+
     // compact the list so dead animals don't accumulate
     if (sim.tick % 120 === 0) {
       let w = 0;
@@ -121,6 +145,38 @@ export class Animals {
     for (let k = 0; k < n && this.list.length < MAX; k++) {
       const x = this.rng.int(2, W.w - 2), y = this.rng.int(2, W.h - 2);
       if (W.walkable(x, y)) this.list.push({ type, x: x + 0.5, y: y + 0.5, vx: 0, vy: 0, energy: 0.7, age: 0, alive: true, cd: 0 });
+    }
+  }
+
+  // Bank a slain animal's loot. Attributes it to the nation whose settlement is
+  // nearest (within HARVEST_R) — its hunters/foragers harvest the carcass into
+  // tribe.stock — else it falls to the ambient ground pile. Deterministic: rolls
+  // on this.rng (the animal rng), so loot never perturbs agent evolution.
+  _resolveDrops(sim, a) {
+    const drops = rollDrops(KIND_NAME[a.type], this.rng);
+    if (!drops.length) return;
+
+    // nearest settlement (few of them) decides the harvesting nation
+    let tribe = null, bd = HARVEST_R2;
+    const S = sim.settlements;
+    if (S) {
+      for (let i = 0; i < S.length; i++) {
+        const s = S[i];
+        const dx = s.x - a.x, dy = s.y - a.y, d2 = dx * dx + dy * dy;
+        if (d2 < bd) { bd = d2; tribe = sim.tribes.get(s.tribeId) || null; }
+      }
+    }
+
+    if (tribe && tribe.members > 0) {
+      const stock = tribe.stock || (tribe.stock = {});
+      for (let i = 0; i < drops.length; i++) stock[drops[i].id] = (stock[drops[i].id] || 0) + drops[i].qty;
+    } else {
+      // ground pile (bounded): drops with no harvester accumulate in the wild
+      const g = this.ground;
+      for (let i = 0; i < drops.length; i++) {
+        const cur = g.get(drops[i].id) || 0;
+        if (cur < 9999) g.set(drops[i].id, cur + drops[i].qty);
+      }
     }
   }
 

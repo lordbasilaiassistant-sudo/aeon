@@ -13,8 +13,35 @@
 //  - No edits to shared files: it owns the contents of sim.settlements and exposes
 //    getSettlements() / bonusFor() / countOf() for the renderer and Tech systems.
 import { hash2 } from '../core/rng.js';
+import { ITEMS } from './items.js';
 
 export const TIERS = ['Camp', 'Village', 'Town', 'City'];
+
+// ---------------------------------------------------------------------------
+// PRODUCTION RECIPES — derived ONCE from the item registry (items.js is the
+// single source of truth). We split the craftable items by which improvement
+// makes them so produceTick can run each building's recipes in one cheap pass.
+//   smithy   : materials + metal tools/weapons (tech-gated)
+//   workshop : stone tools/weapons + crafted goods (leather/medicine/pottery)
+// Each recipe: {id, from:[itemId,...], tech, value} — `from` are consumed 1:1
+// per unit produced (a recipe makes `units` of `id`, consuming `units` of each
+// input). Materials are cheap-tier so they flow; finished goods cost more value.
+function buildRecipes() {
+  const smithy = [], workshop = [];
+  for (let i = 0; i < ITEMS.length; i++) {
+    const it = ITEMS[i];
+    if (!it.madeBy || !it.madeFrom) continue;
+    const rec = { id: it.id, from: it.madeFrom, tech: it.tech || null, value: it.value, type: it.type };
+    if (it.madeBy === 'smithy') smithy.push(rec);
+    else if (it.madeBy === 'workshop') workshop.push(rec);
+  }
+  // make cheaper items first so a smithy refines ORE→bronze/iron before it tries
+  // to forge a weapon that needs that very metal this same year.
+  const byVal = (a, b) => a.value - b.value;
+  smithy.sort(byVal); workshop.sort(byVal);
+  return { smithy, workshop };
+}
+const RECIPES = buildRecipes();
 
 const SETTLE_INTERVAL = 60;   // = TICKS_PER_YEAR; settlements resolve once per year
 const SETTLE_CELL     = 8;    // tiles per coarse block used to detect NEW clusters
@@ -185,6 +212,94 @@ export class SettlementSystem {
       food: 1 + a.count * 0.02 + a.tierSum * 0.01,
       research: 1 + a.tierSum * 0.06,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // PRODUCTION — a nation's smithies/workshops forge items.js recipes from raw
+  // resources (+tech) into tribe.stock. Extends the old ore→metal line into the
+  // full item tree. Capacity scales with how many/large the producing buildings
+  // are: a City smithy out-forges a Village one.
+  // -------------------------------------------------------------------------
+
+  // does tribe `tribeId` have at least one settlement carrying `building`?
+  // returns a CAPACITY number (0 = none) = sum over qualifying settlements of
+  // (tier+1), so bigger/more cities produce more. Mirrors _layout's gates.
+  _buildingCapacity(tribeId, building) {
+    const arr = this._index.get(tribeId);
+    let cap = 0;
+    const sets = arr ? arr : this.getSettlements();
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i];
+      if (s.tribeId !== tribeId) continue;
+      const era = s.era | 0, tier = s.tier | 0;
+      let has = false;
+      if (building === 'workshop') has = (tier >= 1 && era >= 1);
+      else if (building === 'smithy') has = (tier >= 2 && era >= 3);
+      if (has) cap += tier + 1;
+    }
+    return cap;
+  }
+
+  /**
+   * PRODUCTION TICK — call once per sim-year per tribe. Runs the tribe's smithy
+   * and workshop recipes (from items.js) in cheap->expensive order, consuming
+   * raw inputs from tribe.stock and banking the products back into tribe.stock.
+   * Tech-gated (recipe.tech must be in tribe.tech.known); throughput scales with
+   * building capacity (city tier). Returns a {id:qtyProduced} map of what it made.
+   */
+  produceTick(sim, tribe) {
+    if (!tribe || tribe.members === 0 || !tribe.stock) return null;
+    const known = (tribe.tech && tribe.tech.known) ? tribe.tech.known : null;
+    const stock = tribe.stock;
+    let out = null;
+    const runLine = (recipes, building) => {
+      const cap = this._buildingCapacity(tribe.id, building);
+      if (cap <= 0) return;
+      // per-recipe unit budget grows with capacity and a little with population.
+      // MATERIALS (bronze/iron/steel) get a bigger budget so they pile up a
+      // surplus; finished goods (tools/weapons) draw a SMALLER share, so a single
+      // tool recipe can't starve the weapon recipe of the same metal — the
+      // intermediate is shared across the products that depend on it.
+      const matBudget  = Math.max(2, Math.round(cap * 3.0 + tribe.members * 0.03));
+      const goodBudget = Math.max(1, Math.round(cap * 1.0 + tribe.members * 0.015));
+      for (let r = 0; r < recipes.length; r++) {
+        const rec = recipes[r];
+        if (rec.tech && (!known || !known.has(rec.tech))) continue; // tech-gated
+        // how many units can we afford? limited by the scarcest input AND by the
+        // per-recipe budget (materials forge more freely than finished goods).
+        let units = (rec.type === 'material') ? matBudget : goodBudget;
+        for (let f = 0; f < rec.from.length; f++) {
+          const have = stock[rec.from[f]] || 0;
+          if (have < units) units = have | 0;
+        }
+        if (units <= 0) continue;
+        for (let f = 0; f < rec.from.length; f++) stock[rec.from[f]] -= units;
+        stock[rec.id] = (stock[rec.id] || 0) + units;
+        if (!out) out = {};
+        out[rec.id] = (out[rec.id] || 0) + units;
+      }
+    };
+    runLine(RECIPES.smithy, 'smithy');     // materials first, then metal tools/weapons
+    runLine(RECIPES.workshop, 'workshop'); // stone gear + crafted goods
+    return out;
+  }
+
+  // Found an extraction improvement (mine/quarry/lumber) for a tribe on the best
+  // nearby unworked node of its choosing — used by the AI/player to start mining.
+  // Sites near the tribe's settlements so extractTick will work it. Returns the
+  // improvement record or null.
+  buildMineNear(sim, tribe, type) {
+    if (!tribe || !sim.resources) return null;
+    const arr = this._index.get(tribe.id) || this.getSettlements();
+    let best = null;
+    for (let i = 0; i < arr.length; i++) {
+      const s = arr[i];
+      if (s.tribeId !== tribe.id) continue;
+      const node = sim.resources.nearestUnimproved(s.x, s.y, type, 14);
+      if (node) { best = node; break; }
+    }
+    if (!best) return null;
+    return sim.resources.buildMine(best, tribe.id);
   }
 
   update(sim, dt) {
