@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AEON — 3D renderer (production · Renderer3D)</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0c1622;
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    #gl { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+    #gl:active { cursor: grabbing; }
+    #hud {
+      position: fixed; left: 12px; top: 12px; z-index: 5;
+      color: #e7eef6; font-size: 12px; line-height: 1.5;
+      background: rgba(10,18,28,0.55); border: 1px solid rgba(120,150,180,0.25);
+      border-radius: 10px; padding: 10px 13px; backdrop-filter: blur(4px);
+      max-width: 320px; pointer-events: none;
+    }
+    #hud b { color: #8fd0ff; }
+    #hud .k { color: #b9c6d4; }
+    #hud .row { margin-top: 4px; }
+    #minimap {
+      position: fixed; right: 12px; bottom: 12px; z-index: 6;
+      width: 220px; height: 143px; image-rendering: pixelated;
+      border: 1px solid rgba(120,150,180,0.35); border-radius: 6px;
+      background: #0c1622; pointer-events: none;
+    }
+    #err {
+      position: fixed; inset: 0; display: none; place-items: center; z-index: 30;
+      background: rgba(8,12,18,0.92); color: #ffd2d2; padding: 24px;
+      font-size: 14px; white-space: pre-wrap; text-align: center;
+    }
+    #loading {
+      position: fixed; inset: 0; display: grid; place-items: center; z-index: 10;
+      background: #0c1622; color: #cfe0f0; font-size: 15px; letter-spacing: 0.5px;
+    }
+    .badge { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:6px;
+      background:rgba(80,160,255,0.18); color:#9fd0ff; font-size:11px; }
+  </style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <canvas id="minimap" width="200" height="130"></canvas>
+  <div id="loading">seeding a living world…</div>
+  <div id="hud">
+    <div><b>AEON</b> · 3D renderer <span class="badge">Renderer3D (production)</span></div>
+    <div class="row"><span class="k">Year</span> <span id="m-year">0</span>
+      · <span class="k">Pop</span> <span id="m-pop">0</span>
+      · <span class="k">Nations</span> <span id="m-nat">0</span>
+      · <span class="k">Cities</span> <span id="m-cit">0</span></div>
+    <div class="row"><span class="k">figures</span> <span id="m-drawn">0</span>
+      · <span class="k">buildings</span> <span id="m-bld">0</span>
+      · <span class="k">ms/frame</span> <span id="m-ms">0</span></div>
+    <div class="row"><span class="k">picked tile</span> <span id="m-pick">—</span></div>
+    <div class="row" style="margin-top:7px; color:#9fb3c6">
+      drag <b style="color:#cfe">orbit</b> · wheel <b style="color:#cfe">zoom</b> ·
+      right/shift-drag <b style="color:#cfe">pan</b> · click <b style="color:#cfe">pick</b> · <b style="color:#cfe">R</b> reset
+    </div>
+  </div>
+  <div id="err"></div>
+
+  <script type="module">
+    // Preview the PRODUCTION adapter (Renderer3D) against a booted GAME Sim, driven
+    // by the real game Camera — i.e. the exact wiring the integrator will use.
+    import { Sim } from './src/sim/sim.js';
+    import { Camera } from './src/render/camera.js';
+    import { Renderer3D } from './src/render/renderer3d.js';
+
+    const errEl = document.getElementById('err');
+    function fail(msg) {
+      errEl.style.display = 'grid';
+      errEl.textContent = '3D demo error:\n\n' + msg;
+      const l = document.getElementById('loading'); if (l) l.style.display = 'none';
+      console.error(msg);
+    }
+    window.addEventListener('error', (e) => fail(e.message + '\n' + (e.error && e.error.stack || '')));
+    window.addEventListener('unhandledrejection', (e) => fail('' + (e.reason && e.reason.stack || e.reason)));
+
+    function boot() {
+      if (!Renderer3D.isSupported()) { fail('WebGL2 is not available in this browser.'); return; }
+
+      // 1) build a populated world: a decent map, then step it a few centuries so
+      //    nations spread, found cities, and claim territory (gives the 3D view
+      //    real buildings + borders to render).
+      const sim = new Sim({ w: 200, h: 130, seed: 7, cap: 2600 });
+      for (let i = 0; i < 600; i++) sim.step();
+
+      const canvas = document.getElementById('gl');
+      const cam = new Camera(sim.world, window.innerWidth, window.innerHeight);
+      cam.x = cam.tx = sim.world.w / 2;
+      cam.y = cam.ty = sim.world.h / 2;
+      cam.zoom = cam.tzoom = 6;
+
+      let r;
+      try {
+        r = new Renderer3D(canvas, sim, cam, r);   // mirrors new Renderer(canvas, sim, cam, fx)
+      } catch (e) {
+        fail('Renderer3D init failed: ' + (e && e.stack || e)); return;
+      }
+
+      function resize() {
+        const w = window.innerWidth, h = window.innerHeight;
+        cam.resize(w, h);
+        r.resize(w, h);
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      document.getElementById('loading').style.display = 'none';
+
+      // ---- input: orbit (drag), zoom (wheel via game cam), pan (right/shift drag) ----
+      let dragging = false, panning = false, lx = 0, ly = 0, moved = 0;
+      canvas.addEventListener('pointerdown', (e) => {
+        dragging = true; moved = 0;
+        panning = (e.button === 2) || e.shiftKey;
+        lx = e.clientX; ly = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - lx, dy = e.clientY - ly;
+        lx = e.clientX; ly = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
+        if (panning) {
+          // pan the GAME camera (its panBy is in screen px) — drives the 3D target
+          cam.panBy(dx, dy);
+        } else {
+          r.orbit(-dx * 0.005, -dy * 0.005);
+        }
+      });
+      const endDrag = (e) => {
+        // a click (no drag) = pick the terrain → proves screenToWorld raycast works
+        if (dragging && moved < 4) {
+          const hit = r.screenToWorld(e.clientX, e.clientY);
+          const el = document.getElementById('m-pick');
+          if (hit) {
+            el.textContent = `${hit.x.toFixed(1)}, ${hit.y.toFixed(1)}`;
+            const a = sim.agentAt(hit.x, hit.y, 2.5);
+            const s = sim.settlementAt ? sim.settlementAt(hit.x, hit.y, 4) : null;
+            if (a) r.selection = { agent: a };
+            else if (s) { const tr = sim.tribes.get(s.tribeId); if (tr) r.selection = { tribe: tr }; }
+            else r.selection = null;
+          } else el.textContent = '(missed terrain)';
+        }
+        dragging = false; panning = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch {}
+      };
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        cam.zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? 0.9 : 1.11);
+      }, { passive: false });
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'r' || e.key === 'R') {
+          cam.tx = sim.world.w / 2; cam.ty = sim.world.h / 2; cam.tzoom = 6;
+          r._yaw = 0; r._pitch = 0.95; r.selection = null;
+        }
+      });
+
+      // ---- live loop: keep the sim breathing + render via the adapter ----
+      const mYear = document.getElementById('m-year'), mPop = document.getElementById('m-pop');
+      const mNat = document.getElementById('m-nat'), mCit = document.getElementById('m-cit');
+      const mDrawn = document.getElementById('m-drawn'), mBld = document.getElementById('m-bld');
+      const mMs = document.getElementById('m-ms');
+      let acc = 0, last = performance.now(), msAvg = 0, hudT = 0;
+
+      function frame(now) {
+        const dt = Math.min(100, now - last); last = now;
+        acc += dt;
+        let steps = 0;
+        while (acc > 160 && steps < 3) { sim.step(); acc -= 160; steps++; }
+
+        cam.update();
+        const t0 = performance.now();
+        r.render();
+        const t1 = performance.now();
+        msAvg = msAvg * 0.9 + (t1 - t0) * 0.1;
+
+        if (now - hudT > 250) {
+          hudT = now;
+          mYear.textContent = sim.year();
+          mPop.textContent = sim.population();
+          mNat.textContent = sim.activeTribes();
+          mCit.textContent = sim.settlements.length;
+          mDrawn.textContent = r.gl3d._lastDrawn || 0;
+          mBld.textContent = r.gl3d._lastBuildings || 0;
+          mMs.textContent = msAvg.toFixed(2);
+        }
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    boot();
+  </script>
+</body>
+</html>

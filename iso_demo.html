@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>AEON — 2.5D look (oblique height-extruded terrain)</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07090f;
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #e6ebf2; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+
+  #boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 40%, #16263a, #07090f 70%); z-index: 20; transition: opacity .5s; }
+  #boot .inner { text-align: center; }
+  #boot h1 { font-size: 40px; letter-spacing: .22em; margin: 0 0 6px; font-weight: 700; }
+  #boot p { margin: 0; opacity: .7; font-size: 13px; letter-spacing: .04em; }
+  #boot.gone { opacity: 0; pointer-events: none; }
+
+  #hud { position: fixed; top: 12px; left: 12px; z-index: 10; display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none; }
+  .panel { background: rgba(12,18,28,0.72); border: 1px solid rgba(120,150,190,0.18);
+    border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(6px); pointer-events: auto;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4); }
+  .title { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; opacity: .6; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 6px 0; }
+  .row label { width: 56px; opacity: .8; }
+  .row input[type=range] { flex: 1; accent-color: #6fae5a; }
+  .stats { font-size: 12px; line-height: 1.7; }
+  .stats b { color: #9fd089; font-variant-numeric: tabular-nums; }
+  .hint { position: fixed; bottom: 12px; left: 12px; z-index: 10; font-size: 11.5px; opacity: .55;
+    background: rgba(12,18,28,0.6); padding: 7px 11px; border-radius: 8px; max-width: 360px; line-height: 1.6; }
+  .btnrow { display: flex; gap: 6px; margin-top: 8px; }
+  .btnrow button { flex: 1; background: rgba(40,60,90,0.5); color: #dfe7f0; border: 1px solid rgba(120,150,190,0.25);
+    border-radius: 7px; padding: 6px 4px; font-size: 11px; cursor: pointer; }
+  .btnrow button:hover { background: rgba(60,90,130,0.6); }
+  .err { position: fixed; bottom: 0; left: 0; right: 0; background: #3a0d0d; color: #ffd0d0; font-size: 12px;
+    padding: 10px 14px; z-index: 30; white-space: pre-wrap; font-family: ui-monospace, monospace; display: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="view"></canvas></div>
+
+<div id="boot"><div class="inner">
+  <h1>AEON</h1>
+  <p id="bootmsg">seeding a living world…</p>
+</div></div>
+
+<div id="hud">
+  <div class="panel">
+    <div class="title">2.5D — oblique relief</div>
+    <div class="row"><label>Tilt</label><input id="tilt" type="range" min="0" max="1" step="0.01" value="1" /></div>
+    <div class="row"><label>Zoom</label><input id="zoom" type="range" min="2" max="40" step="0.1" value="7" /></div>
+    <div class="btnrow">
+      <button id="pause">⏸ Pause</button>
+      <button id="reset">⟳ Reset view</button>
+    </div>
+  </div>
+  <div class="panel stats">
+    <div>Year <b id="s-year">0</b> · Pop <b id="s-pop">0</b></div>
+    <div>Nations <b id="s-nat">0</b> · Cities <b id="s-cit">0</b></div>
+    <div>Frame <b id="s-ms">0</b> ms · <b id="s-fps">0</b> fps</div>
+  </div>
+</div>
+
+<div class="hint">
+  Drag to pan · scroll to zoom · <b>Tilt</b> flattens (top-down) or exaggerates the 3D relief.
+  Higher ground rises on screen with lit slopes &amp; cliff faces; the sim keeps stepping so it stays alive.
+</div>
+
+<div id="err" class="err"></div>
+
+<script type="module">
+import { Sim } from './src/sim/sim.js';
+import { IsoRenderer } from './src/render/iso25.js';
+
+const errBox = document.getElementById('err');
+function fail(e) {
+  errBox.style.display = 'block';
+  errBox.textContent = 'ERROR: ' + (e && e.stack ? e.stack : e);
+  console.error(e);
+}
+window.addEventListener('error', (ev) => fail(ev.error || ev.message));
+window.addEventListener('unhandledrejection', (ev) => fail(ev.reason));
+
+try {
+  const canvas = document.getElementById('view');
+  const boot = document.getElementById('boot');
+  const bootmsg = document.getElementById('bootmsg');
+
+  // 1) build a real Sim and step it so the world is populated (the brief's recipe)
+  bootmsg.textContent = 'seeding a living world…';
+  const sim = new Sim({ w: 200, h: 130, seed: 7, cap: 2200 });
+  for (let i = 0; i < 150; i++) sim.step();   // ~150 ticks => tribes, cities, agents
+
+  // 2) the 2.5D renderer over that real sim
+  const renderer = new IsoRenderer(canvas, sim);
+
+  // center the camera on the busiest tribe so there's something to see immediately
+  let cx = sim.world.w / 2, cy = sim.world.h / 2, best = -1;
+  for (const tr of sim.tribes.values()) {
+    if (tr.members > best) { best = tr.members; cx = tr.capitalX; cy = tr.capitalY; }
+  }
+  renderer.cam.x = renderer.cam.tx = cx;
+  renderer.cam.y = renderer.cam.ty = cy;
+  renderer.cam.zoom = renderer.cam.tzoom = 7;
+
+  function fit() {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.resize(w, h);
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  // ---- input: pan / zoom / tilt -------------------------------------------
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.classList.add('drag');
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    renderer.cam.panBy(e.clientX - lastX, e.clientY - lastY);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  const endDrag = (e) => { dragging = false; canvas.classList.remove('drag'); };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    renderer.cam.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
+    zoomSlider.value = renderer.cam.tzoom;
+  }, { passive: false });
+
+  const tiltSlider = document.getElementById('tilt');
+  const zoomSlider = document.getElementById('zoom');
+  tiltSlider.addEventListener('input', () => renderer.cam.setTilt(parseFloat(tiltSlider.value)));
+  zoomSlider.addEventListener('input', () => { renderer.cam.tzoom = parseFloat(zoomSlider.value); });
+
+  let paused = false;
+  const pauseBtn = document.getElementById('pause');
+  pauseBtn.addEventListener('click', () => { paused = !paused; pauseBtn.textContent = paused ? '▶ Play' : '⏸ Pause'; });
+  document.getElementById('reset').addEventListener('click', () => {
+    renderer.cam.tx = cx; renderer.cam.ty = cy; renderer.cam.tzoom = 7; renderer.cam.ttilt = 1;
+    tiltSlider.value = 1; zoomSlider.value = 7;
+  });
+
+  // ---- stats ----
+  const $ = (id) => document.getElementById(id);
+  let frames = 0, msAcc = 0, statT = 0;
+  function writeStats() {
+    if (frames > 0) {
+      $('s-ms').textContent = (msAcc / frames).toFixed(1);
+      const f = Math.round(1000 / (msAcc / frames));
+      $('s-fps').textContent = isFinite(f) ? f : '—';
+    }
+    $('s-year').textContent = sim.year();
+    $('s-pop').textContent = sim.population();
+    $('s-nat').textContent = sim.activeTribes();
+    $('s-cit').textContent = (sim.settlements || []).length;
+  }
+  writeStats();   // prime immediately so the panel never reads a misleading 0
+
+  // ---- main loop: keep stepping the sim a little + render every frame -------
+  boot.classList.add('gone');
+  setTimeout(() => boot.remove(), 600);
+
+  function frame(now) {
+    const t0 = performance.now();
+    if (!paused) {
+      // step the sim a couple ticks per frame so the world feels alive but the
+      // renderer (the thing we're showing off) stays the star.
+      sim.step();
+      if ((sim.tick & 1) === 0) sim.step();
+    }
+    renderer.render();
+    const dt = performance.now() - t0;
+
+    frames++; msAcc += dt; statT += 16;
+    if (statT >= 480) {
+      writeStats();
+      frames = 0; msAcc = 0; statT = 0;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+} catch (e) {
+  fail(e);
+}
+</script>
+</body>
+</html>
