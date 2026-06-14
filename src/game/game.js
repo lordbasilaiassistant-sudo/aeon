@@ -47,6 +47,8 @@ export class Game {
     this.selBox = null;           // live selection rectangle (world coords) for the renderer
     this.foundMode = false;       // when true, the next click founds a new city
     this.gameOver = null;         // 'defeat' | 'victory' once the run ends (#8 fail-state)
+    this._playerEverLived = false; // guard: only DEFEAT after the nation has actually lived (members
+                                   // is 0 for a frame right after createPlayerPeople — never false-defeat at start)
     this.keys = new Set();
     this.acc = 0;                 // sim-step accumulator
 
@@ -193,6 +195,7 @@ export class Game {
     if (this.playerTribe) this.playerTribe.isPlayer = false;
     this.playerTribe = tribe;
     tribe.isPlayer = true;
+    this._playerEverLived = false;   // reset the defeat guard for the newly-led nation
     this.mode = 'nation';
     this.ui.setMode('nation', tribe);
     this.ui.showNationBar(tribe, this);
@@ -370,7 +373,8 @@ export class Game {
     // FAIL-STATE (#8): the player's nation is exempt from the extinction cull, so it is never
     // removed from the map — we must detect a wipe DIRECTLY here, or you soft-lock at 0 souls with
     // no game-over. A real defeat: pause the world, tell the player, surface an end screen if present.
-    if (this.playerTribe && this.playerTribe.members === 0 && !this.gameOver) {
+    if (this.playerTribe && this.playerTribe.members > 0) this._playerEverLived = true;
+    if (this.playerTribe && this._playerEverLived && this.playerTribe.members === 0 && !this.gameOver) {
       this.gameOver = 'defeat';
       this.speedIdx = 0; this.ui.setSpeed(0);   // the world stops when your people are gone
       this.ui.toast({ type: 'extinct', msg: `${this.playerTribe.name} is no more. Your people have died out.`, color: this.playerTribe.hue });
