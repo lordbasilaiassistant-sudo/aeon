@@ -3,6 +3,7 @@
 import { Sim, TICKS_PER_YEAR } from '../sim/sim.js';
 import { Camera } from '../render/camera.js';
 import { Renderer } from '../render/renderer.js';
+import { Renderer3D } from '../render/renderer3d.js';
 import { FX } from '../render/fx.js';
 
 export const SPEEDS = [0, 1, 2, 3, 5];   // displayed multiplier (0 = paused)
@@ -20,7 +21,18 @@ export class Game {
     this.gov = this.sim.governance; // expose the GovernanceAPI to the UI (game.gov.*)
     this.world = this.sim.world;
     this.cam = new Camera(this.world, window.innerWidth, window.innerHeight);
-    this.renderer = new Renderer(canvas, this.sim, this.cam, this.fx);
+    // Renderer: prefer the animated WebGL2 3D renderer when supported, else the Canvas2D fallback.
+    // Both share one interface, so the rest of the game is renderer-agnostic. localStorage 'aeon3d'
+    // === '0' forces 2D; anything else (default) uses 3D when WebGL2 is available.
+    this.use3D = false;
+    try {
+      const want = (typeof localStorage === 'undefined') || localStorage.getItem('aeon3d') !== '0';
+      if (want && Renderer3D.isSupported()) {
+        this.renderer = new Renderer3D(canvas, this.sim, this.cam, this.fx);
+        this.use3D = true;
+      }
+    } catch (e) { this.use3D = false; this.renderer = null; }
+    if (!this.renderer) this.renderer = new Renderer(canvas, this.sim, this.cam, this.fx);
 
     this.gameMode = 'creative';   // 'survival' | 'creative' (set by start screen)
     this.mode = 'god';            // 'god' | 'nation' (camera/control altitude)
@@ -44,6 +56,19 @@ export class Game {
 
   resize() {
     this.renderer.resize(window.innerWidth, window.innerHeight);
+  }
+
+  // map a screen pixel to a world TILE — through the 3D raycast when in 3D (may return null when a
+  // ray misses the terrain), else the flat 2D unproject. Click handlers must null-check the result.
+  worldAt(sx, sy) {
+    if (this.use3D && this.renderer && this.renderer.screenToWorld) return this.renderer.screenToWorld(sx, sy);
+    return this.cam.screenToWorld(sx, sy);
+  }
+
+  // flip between the 3D and 2D renderers — a reload keeps it simple and bulletproof (clean GL teardown).
+  toggle3D() {
+    try { localStorage.setItem('aeon3d', this.use3D ? '0' : '1'); } catch (e) { /* private mode */ }
+    location.reload();
   }
 
   get speed() { return SPEEDS[this.speedIdx]; }

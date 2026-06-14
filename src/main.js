@@ -51,6 +51,8 @@ function boot() {
   buildCreateScreen();
   wireStartScreen();
   ui.setActiveTool(game.tool);
+  const b3d = document.getElementById('btn-3d');
+  if (b3d) { b3d.textContent = game.use3D ? '◳ 3D' : '▢ 2D'; b3d.onclick = () => game.toggle3D(); }
   startRenderLoop();
 }
 

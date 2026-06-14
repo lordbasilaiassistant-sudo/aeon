@@ -7,7 +7,7 @@ const TOOL_KEYS = {
 export function bindInput(game) {
   const canvas = game.canvas;
   const cam = game.cam;
-  let dragging = false, panning = false, selecting = false;
+  let dragging = false, panning = false, selecting = false, orbiting = false;
   let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = 0;
   let selStart = null;
   const pointers = new Map();
@@ -43,16 +43,18 @@ export function bindInput(game) {
     lastX = downX = e.clientX; lastY = downY = e.clientY; moved = 0;
     // RTS command mode: left button drags a selection box / clicks an order. Right
     // button still pans so you can reposition while commanding.
-    if (game.commandMode && e.button === 0) {
+    if (game.use3D && e.button === 0 && e.shiftKey && !game.commandMode) {
+      orbiting = true;                                   // 3D: Shift+left-drag rotates the camera
+    } else if (game.commandMode && e.button === 0) {
       selecting = true;
-      selStart = cam.screenToWorld(e.clientX, e.clientY);
-      game.selBox = { x0: selStart.x, y0: selStart.y, x1: selStart.x, y1: selStart.y };
+      selStart = game.worldAt(e.clientX, e.clientY);
+      if (selStart) game.selBox = { x0: selStart.x, y0: selStart.y, x1: selStart.x, y1: selStart.y };
     } else if (e.button === 2 || e.button === 1 || (isPanTool() && !e.shiftKey)) {
       panning = true;
     } else {
       dragging = true;
-      const w = cam.screenToWorld(e.clientX, e.clientY);
-      game.applyTool(w.x, w.y, false);
+      const w = game.worldAt(e.clientX, e.clientY);
+      if (w) game.applyTool(w.x, w.y, false);
     }
   });
 
@@ -69,23 +71,26 @@ export function bindInput(game) {
       return;
     }
 
-    // brush ghost (god tools)
-    const w = cam.screenToWorld(e.clientX, e.clientY);
-    if (!isPanTool()) {
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    lastX = e.clientX; lastY = e.clientY;
+
+    // 3D orbit (Shift+left-drag) overrides everything else
+    if (orbiting) { if (game.renderer.orbit) game.renderer.orbit(dx * 0.008, -dy * 0.008); return; }
+
+    // brush ghost (god tools) — world point is null when a 3D ray misses the terrain
+    const w = game.worldAt(e.clientX, e.clientY);
+    if (!isPanTool() && w) {
       game.renderer.ghost = { x: w.x, y: w.y, r: game.brush, color: ghostColor(game.tool) };
     } else {
       game.renderer.ghost = null;
     }
 
-    const dx = e.clientX - lastX, dy = e.clientY - lastY;
-    moved += Math.abs(dx) + Math.abs(dy);
-    lastX = e.clientX; lastY = e.clientY;
-
-    if (selecting && selStart) {
+    if (selecting && selStart && w) {
       game.selBox = { x0: selStart.x, y0: selStart.y, x1: w.x, y1: w.y };
     } else if (panning) {
       cam.panBy(dx, dy);
-    } else if (dragging) {
+    } else if (dragging && w) {
       game.applyTool(w.x, w.y, true);
     }
   });
@@ -93,14 +98,19 @@ export function bindInput(game) {
   const endPointer = (e) => {
     if (pointers.size <= 2) pinchDist = 0;
     pointers.delete(e.pointerId);
+    if (orbiting) { orbiting = false; dragging = false; panning = false; return; }
     if (selecting) {
-      const up = cam.screenToWorld(e.clientX, e.clientY);
-      if (moved < 6) game.issueOrder(up.x, up.y);          // a click = order selected units
-      else game.boxSelect(selStart.x, selStart.y, up.x, up.y); // a drag = select your units
+      const up = game.worldAt(e.clientX, e.clientY);
+      if (up) {
+        if (moved < 6) game.issueOrder(up.x, up.y);            // a click = order selected units
+        else if (selStart) game.boxSelect(selStart.x, selStart.y, up.x, up.y); // a drag = select your units
+      }
       game.selBox = null; selStart = null; selecting = false;
-    } else if (dragging && moved < 5) {
-      const w = cam.screenToWorld(downX, downY);
-      game.applyTool(w.x, w.y, false); // treat as click
+    } else if ((dragging || (panning && e.button === 0)) && moved < 5) {
+      // a TAP (left-click, little movement) = a click: select/inspect/possess or use the tool.
+      // A drag still pans. This is the intuitive Civ/RTS behavior — tap to pick, drag to move.
+      const w = game.worldAt(downX, downY);
+      if (w) game.applyTool(w.x, w.y, false);
     }
     dragging = false; panning = false;
   };
