@@ -137,11 +137,13 @@ out vec3 vColor;
 out vec4 vOwner;
 out float vDist;   // camera-space depth for fog
 out float vHeight; // world Y for subtle height tint
+out vec2 vXZ;      // world XZ for cloud shadows
 void main(){
   vNormal = aNormal;
   vColor = aColor;
   vOwner = aOwner;
   vHeight = aPos.y;
+  vXZ = aPos.xz;
   vec4 clip = uViewProj * vec4(aPos, 1.0);
   vDist = clip.w;
   gl_Position = clip;
@@ -154,6 +156,7 @@ in vec3 vColor;
 in vec4 vOwner;
 in float vDist;
 in float vHeight;
+in vec2 vXZ;
 uniform vec3 uSunDir;     // normalized, toward the sun
 uniform vec3 uSunColor;
 uniform vec3 uAmbient;
@@ -161,7 +164,19 @@ uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
 uniform float uOverlay;   // global nation-overlay strength (0..1)
+uniform float uTime;      // tick clock for animated cloud shadows
+uniform vec2 uCloud;      // cloud-field scroll offset (world units)
 out vec4 frag;
+
+// cheap value-noise for soft drifting cloud shadows (2 octaves)
+float hash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0-2.0*f);
+  float a = hash(i), b = hash(i+vec2(1,0)), c = hash(i+vec2(0,1)), d = hash(i+vec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
+
 void main(){
   vec3 N = normalize(vNormal);
   float diff = max(dot(N, uSunDir), 0.0);
@@ -177,6 +192,14 @@ void main(){
   // a faint specular sheen on near-flat lit faces (snow/rock glint)
   float spec = pow(max(diff, 0.0), 16.0) * 0.10;
   lit += spec;
+
+  // DRIFTING CLOUD SHADOWS: a soft scrolling noise field darkens the land where a
+  // cloud passes over — ambient life, costs two noise lookups, no extra geometry.
+  vec2 cp = (vXZ + uCloud) * 0.018;
+  float cl = vnoise(cp) * 0.62 + vnoise(cp * 2.3 + 7.0) * 0.38;
+  float shadow = smoothstep(0.52, 0.78, cl);     // only the denser cloud cores cast
+  lit *= 1.0 - shadow * 0.34;
+
   // height haze: very high peaks pick up a touch of sky for aerial depth
   lit = mix(lit, uFogColor, clamp((vHeight/14.0 - 0.7)*0.5, 0.0, 0.18));
   // distance fog -> atmospheric depth
@@ -229,35 +252,92 @@ void main(){
   frag = vec4(col, 0.72);   // translucent
 }`;
 
-// Instanced billboards: one unit quad, per-instance (worldPos, size, rgb, kind).
+// Instanced ANIMATED billboards: one unit quad, per-instance (worldPos, size, rgb,
+// kind) PLUS an animation vector iAnim = (phase, speed, packedState). The whole
+// living crowd — walk cycles, idle breathe, combat lunges, carried loads, death
+// fades — animates ENTIRELY in-shader from a single uTime uniform + per-instance
+// phase, so 2000+ agents move out of phase in ONE instanced draw call. Zero
+// per-frame CPU object churn: renderer3d only writes flat floats into the buffer.
+//
+// iAnim.x = phase   : per-agent 0..1 seed → desync the gait/breath across the crowd
+// iAnim.y = speed   : 0 idle .. 1 running → blends idle-breathe → walk amplitude
+// iAnim.z = state   : packed flags+facing+fade, decoded below:
+//                     facing  = fract(state)         (0..1 → heading angle/τ)
+//                     carry   = mod(floor(state),2.)  (1 = hauling a load)
+//                     combat  = mod(floor(state/2.),4.)/3. (0..1 strike pulse)
+//                     fade    = mod(floor(state/8.),16.)/15. (1 alive .. 0 dead/gone)
 const SPRITE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aCorner;       // -0.5..0.5 quad
 layout(location=1) in vec3 iPos;          // world position (x, y, z)
 layout(location=2) in vec4 iData;         // size, r, g, b  (packed)
 layout(location=3) in vec2 iMeta;         // kind(0 agent,1 settle,2 shadow), bright
+layout(location=4) in vec3 iAnim;         // phase, speed, packedState
 uniform mat4 uViewProj;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
+uniform float uTime;
 uniform float uPxScale;
 out vec3 vColor;
 out vec2 vUV;
 out float vKind;
 out float vDist;
+out float vPhase;     // gait clock for this agent (radians)
+out float vSpeed;     // 0 idle .. 1 run
+out float vFacing;    // -1 face-left .. +1 face-right relative to camera
+out float vCarry;     // 1 = hauling a load
+out float vCombat;    // 0..1 attack-strike pulse
+out float vFade;      // 1 alive .. 0 dead
+
 void main(){
   float size = iData.x;
-  vColor = iData.yzw * iMeta.y;
-  vKind = iMeta.x;
   vUV = aCorner;
+  vKind = iMeta.x;
+
+  // ---- decode the packed animation state ----
+  float st = iAnim.z;
+  float facingA = fract(st) * 6.2831853;          // heading angle (world XZ)
+  float fl = floor(st);
+  vCarry  = mod(fl, 2.0);
+  vCombat = mod(floor(st / 2.0), 4.0) / 3.0;
+  vFade   = mod(floor(st / 8.0), 16.0) / 15.0;
+  vSpeed  = iAnim.y;
+
+  // gait clock: a global beat + per-agent phase, sped up when running. Two legs
+  // means a full stride is 2π; we advance faster the quicker the agent moves.
+  float gait = uTime * (3.4 + vSpeed * 7.0) + iAnim.x * 6.2831853;
+  vPhase = gait;
+
+  // FACING: project the agent's world heading onto the camera-right axis so the
+  // fragment shader can flip/skew the silhouette to "lean" into travel without a
+  // separate draw. (camRight is unit; dot gives -1..1.)
+  vec3 headDir = vec3(cos(facingA), 0.0, sin(facingA));
+  vFacing = dot(headDir, uCamRight);
+
   vec3 worldPos;
   if (iMeta.x > 1.5) {
-    // SHADOW: a flat ground quad on the XZ plane (not camera-facing)
-    worldPos = iPos + vec3(aCorner.x, 0.0, aCorner.y) * size;
+    // SHADOW: a flat ground quad on the XZ plane (not camera-facing). It squashes
+    // a touch under the body on each footfall so the contact reads (cheap life).
+    float bob = (vSpeed > 0.02) ? (0.04 * vSpeed * (0.5 + 0.5*sin(gait*2.0))) : 0.0;
+    float sq = 1.0 + bob;                 // shadow grows slightly as body lifts
+    worldPos = iPos + vec3(aCorner.x, 0.0, aCorner.y) * size * sq;
+    vColor = iData.yzw;                   // (unused by shadow frag)
   } else {
-    // BILLBOARD: face the camera, anchored at the base (lift quad so it stands up)
+    // BILLBOARD figure: face the camera, anchored at the base.
+    // VERTICAL BODY BOB: a gentle up/down on each stride (2 steps per cycle) when
+    // walking; a slow breathe when idle. Eased, never popping.
+    float bob = (vSpeed > 0.02)
+      ? (0.5 + 0.5 * sin(gait * 2.0)) * 0.06 * vSpeed * size      // footfall bob
+      : sin(uTime * 1.6 + iAnim.x * 6.2831853) * 0.012 * size;     // idle breathe
+    // COMBAT LUNGE: punch the whole body forward (toward facing) on a strike.
+    float lunge = vCombat * 0.18 * size;
+    // DEATH SINK: a dying figure sags toward the ground as it fades.
+    float sink = (1.0 - vFade) * 0.35 * size;
+
     vec3 right = uCamRight * (aCorner.x * size);
-    vec3 up = uCamUp * ((aCorner.y + 0.5) * size);
-    worldPos = iPos + right + up;
+    vec3 up = uCamUp * ((aCorner.y + 0.5) * size + bob - sink);
+    worldPos = iPos + right + up + uCamRight * (vFacing * lunge);
+    vColor = iData.yzw * iMeta.y;
   }
   vec4 clip = uViewProj * vec4(worldPos, 1.0);
   vDist = clip.w;
@@ -270,14 +350,26 @@ in vec3 vColor;
 in vec2 vUV;     // -0.5..0.5 quad space
 in float vKind;  // 0 agent · 1 settlement marker · 2 shadow · 3 soldier · 4 boat
 in float vDist;
+in float vPhase;   // gait clock (radians)
+in float vSpeed;   // 0 idle .. 1 run
+in float vFacing;  // -1..+1 lean direction (relative to camera)
+in float vCarry;   // 1 hauling a load
+in float vCombat;  // 0..1 strike pulse
+in float vFade;    // 1 alive .. 0 dead
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
 out vec4 frag;
 
-// signed-distance helpers for the little figure silhouette
+// signed-distance helpers for the little articulated figure
 float sdCircle(vec2 p, vec2 c, float r){ return length(p - c) - r; }
 float sdBox(vec2 p, vec2 c, vec2 b){ vec2 d = abs(p - c) - b; return length(max(d,0.0)) + min(max(d.x,d.y),0.0); }
+// a capsule/segment (limb): distance to segment a..b, thickness r
+float sdSeg(vec2 p, vec2 a, vec2 b, float r){
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa,ba)/dot(ba,ba), 0.0, 1.0);
+  return length(pa - ba*h) - r;
+}
 
 void main(){
   float fog = clamp((vDist - uFogNear)/(uFogFar - uFogNear), 0.0, 1.0); fog *= fog;
@@ -300,35 +392,96 @@ void main(){
     return;
   }
 
-  // ----- FIGURE: a human-ish billboard (head + body), tribe-hued -----
-  // quad y runs -0.5 (feet) .. +0.5 (head). Build a little person silhouette.
+  // ----- FIGURE: an ARTICULATED human — head + torso + swinging arms + stepping
+  //       legs — all in SDFs, animated from the gait clock. quad y: -0.5 feet .. +0.5 head.
   vec2 p = vUV;
-  // head: a circle up high
-  float head = sdCircle(p, vec2(0.0, 0.34), 0.13);
-  // body: a tapered box (torso) — wider at shoulders, narrower at feet
-  float bodyW = mix(0.20, 0.12, smoothstep(-0.5, 0.18, p.y));
-  float body = sdBox(p, vec2(0.0, -0.04), vec2(bodyW, 0.26));
-  float fig = min(head, body);
-  // BOAT (vKind 4): add a hull crescent at the base so it reads as a vessel
+  // lean into travel: skew the upper body slightly toward the direction of motion
+  float lean = vFacing * (0.06 + vSpeed * 0.10);
+  p.x -= lean * smoothstep(-0.4, 0.5, p.y);
+
+  // gait drive: legs scissor in antiphase; arms swing opposite the legs. When idle,
+  // 'sw' fades to ~0 so the limbs settle (no jitter), with a faint breathing sway.
+  float run = smoothstep(0.0, 0.25, vSpeed);
+  float swing = sin(vPhase) * (0.12 + 0.16 * vSpeed) * run;   // leg stride amplitude
+  float idleSway = sin(vPhase * 0.5) * 0.010 * (1.0 - run);   // tiny idle weight-shift
+  swing += idleSway;
+  float lift = max(0.0, sin(vPhase)) * 0.05 * run;            // forward knee lift
+
+  // head
+  float head = sdCircle(p, vec2(0.0, 0.34), 0.125);
+  // torso (tapered)
+  float bodyW = mix(0.17, 0.115, smoothstep(-0.18, 0.20, p.y));
+  float torso = sdBox(p, vec2(0.0, 0.06), vec2(bodyW, 0.18));
+  // LEGS: two segments from the hip (0,-0.10) splaying to the feet; one forward,
+  // one back, swapping with the stride → a readable walk cycle.
+  vec2 hip = vec2(0.0, -0.10);
+  float legT = 0.055;
+  vec2 footA = vec2( swing,        -0.50 + lift);
+  vec2 footB = vec2(-swing,        -0.50);
+  float legA = sdSeg(p, hip, footA, legT);
+  float legB = sdSeg(p, hip, footB, legT);
+  float legs = min(legA, legB);
+  // ARMS: shoulders at (±0.13, 0.18), hands swing OPPOSITE the legs. While carrying,
+  // both arms come forward to hold a load; while striking, the lead arm thrusts out.
+  vec2 shL = vec2(-0.135, 0.18), shR = vec2(0.135, 0.18);
+  float armSwing = -swing;
+  vec2 handL = shL + vec2(-0.02 + armSwing*0.6, -0.26);
+  vec2 handR = shR + vec2( 0.02 - armSwing*0.6, -0.26);
+  // carry pose: hands meet in front, lifted (holding a parcel)
+  handL = mix(handL, vec2(-0.05, 0.02), vCarry);
+  handR = mix(handR, vec2( 0.05, 0.02), vCarry);
+  // strike pose: lead arm (in facing dir) punches outward + up on the pulse
+  float dir = (vFacing >= 0.0) ? 1.0 : -1.0;
+  vec2 strikeHand = vec2(dir * (0.30 + 0.12*vCombat), 0.22);
+  handR = mix(handR, strikeHand, vCombat * step(0.0, dir));
+  handL = mix(handL, strikeHand, vCombat * step(dir, -0.0001));
+  float armR = sdSeg(p, shR, handR, 0.05);
+  float armL = sdSeg(p, shL, handL, 0.05);
+  float arms = min(armL, armR);
+
+  float fig = min(min(head, torso), min(legs, arms));
+
+  // CARRIED LOAD: a little crate held at the chest when hauling resources.
+  float load = 1e9;
+  if (vCarry > 0.5) {
+    load = sdBox(p, vec2(0.0, 0.05), vec2(0.10, 0.085));
+    fig = min(fig, load);
+  }
+  // BOAT (vKind 4): a hull crescent under the crew so it reads as a vessel.
+  float hull = 1e9;
   if (vKind > 3.5) {
-    float hull = sdBox(p, vec2(0.0, -0.34), vec2(0.34, 0.10));
+    hull = sdBox(p, vec2(0.0, -0.40), vec2(0.36, 0.10));
     fig = min(fig, hull);
   }
-  if (fig > 0.0) discard;                 // outside the silhouette
 
-  // shading: head + upper body catch light, feet fall into shadow
-  float lit = 0.62 + 0.55 * smoothstep(-0.45, 0.45, p.y);
-  // head reads a touch lighter (skin/helmet highlight)
+  // anti-aliased silhouette edge (smooth, no popping at distance)
+  float aa = fwidth(fig) + 1e-4;
+  float cover = 1.0 - smoothstep(0.0, aa, fig);
+  // death fade: the figure dissolves + drops alpha as vFade → 0
+  cover *= smoothstep(0.0, 0.12, vFade);
+  if (cover < 0.01) discard;
+
+  // shading: upper body catches light, feet fall into shadow (cheap form light)
+  float lit = 0.62 + 0.55 * smoothstep(-0.50, 0.45, p.y);
   float headMask = 1.0 - smoothstep(0.0, 0.02, head);
   vec3 c = vColor * lit;
   c += headMask * vColor * 0.18;
-  // SOLDIER (vKind 3): a darker steel edge + a bright shoulder glint
+  // carried crate reads as a warm wooden parcel, not tribe-tinted
+  float loadMask = (vCarry > 0.5) ? (1.0 - smoothstep(0.0, 0.02, load)) : 0.0;
+  c = mix(c, vec3(0.60, 0.44, 0.26) * lit, loadMask);
+  // SOLDIER (vKind 3): steel-darkened + a shoulder glint that FLASHES on a strike
   if (vKind > 2.5 && vKind < 3.5) {
     c *= 0.92;
-    float glint = (1.0 - smoothstep(0.0, 0.03, sdBox(p, vec2(0.0, 0.14), vec2(0.22, 0.03))));
-    c += glint * vec3(0.9, 0.9, 0.95) * 0.25;
+    float glint = (1.0 - smoothstep(0.0, 0.03, sdBox(p, vec2(0.0, 0.16), vec2(0.20, 0.03))));
+    c += glint * vec3(0.9, 0.9, 0.95) * (0.22 + vCombat * 0.6);
   }
-  frag = vec4(mix(c, uFogColor, fog), 1.0);
+  // combat heat: a red rim pulse on whoever is mid-strike (civilians too)
+  c += vCombat * vec3(0.5, 0.05, 0.0) * (1.0 - smoothstep(0.0, 0.04, fig));
+  // dying: desaturate toward grey as it fades
+  c = mix(vec3(dot(c, vec3(0.33)))*0.7, c, vFade);
+
+  vec3 outC = mix(c, uFogColor, fog);
+  frag = vec4(outC, cover);
 }`;
 
 // Instanced procedural BUILDINGS — a real extruded box per structure (one draw
@@ -347,12 +500,14 @@ out vec3 vColor;
 out float vDist;
 out float vUp;       // 0 base .. 1 roof (for roof shading)
 out float vRoof;
+out vec3 vWorld;     // world pos (for night-window placement)
 void main(){
   vNormal = aNormal;
   vColor = iColor;
   vUp = aPos.y;
   vRoof = iSize.w;
   vec3 world = iBase + vec3(aPos.x * iSize.x, aPos.y * iSize.y, aPos.z * iSize.z);
+  vWorld = world;
   vec4 clip = uViewProj * vec4(world, 1.0);
   vDist = clip.w;
   gl_Position = clip;
@@ -365,12 +520,14 @@ in vec3 vColor;
 in float vDist;
 in float vUp;
 in float vRoof;
+in vec3 vWorld;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec3 uAmbient;
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
+uniform float uNight;   // 0 day .. 1 night → lit windows
 out vec4 frag;
 void main(){
   vec3 N = normalize(vNormal);
@@ -387,8 +544,135 @@ void main(){
     wall *= 0.78 + 0.22 * vUp;
   }
   vec3 lit = wall * (uAmbient + uSunColor * diff);
+  // NIGHT WINDOWS: warm glints flicker on the lower walls after dusk — settlements
+  // read as inhabited at night. A cheap hashed grid lit only on side faces.
+  if (uNight > 0.05 && !topFace) {
+    vec2 wcoord = floor(vec2(vWorld.x + vWorld.z, vUp * 6.0) * 1.6);
+    float win = fract(sin(dot(wcoord, vec2(91.3, 47.7))) * 4137.1);
+    float lampMask = step(0.62, win) * step(0.12, vUp) * step(vUp, 0.85);
+    lit += lampMask * uNight * vec3(1.0, 0.74, 0.34) * 0.7;
+  }
   float fog = clamp((vDist - uFogNear)/(uFogFar - uFogNear), 0.0, 1.0);
   frag = vec4(mix(lit, uFogColor, fog*fog), 1.0);
+}`;
+
+// Instanced TREES — a camera-facing trunk+canopy billboard per forested tile. The
+// canopy SWAYS in the vertex shader (top sheared by a per-tree-phased sine of
+// uTime) so a whole forest breathes in the wind in ONE instanced draw call. The
+// instance buffer is BAKED ONCE from the heightmap (FOREST tiles), never per-frame.
+const TREE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;   // -0.5..0.5 quad
+layout(location=1) in vec4 iPos;      // x, groundY, z, sizeScale
+layout(location=2) in vec2 iVar;      // phase, hueShift
+uniform mat4 uViewProj;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+uniform float uTime;
+out vec2 vUV;
+out float vDist;
+out float vHue;
+void main(){
+  vUV = aCorner;
+  vHue = iVar.y;
+  float size = iPos.w;
+  // WIND SWAY: shear the top of the tree sideways; amount grows toward the canopy.
+  float up = aCorner.y + 0.5;                       // 0 base .. 1 top
+  float sway = sin(uTime * 1.7 + iVar.x * 6.2831853) * 0.12
+             + sin(uTime * 3.1 + iVar.x * 12.0) * 0.04;
+  float bend = sway * up * up;                       // quadratic — base stays planted
+  vec3 right = uCamRight * (aCorner.x * size + bend * size);
+  vec3 upv = uCamUp * (up * size);
+  vec3 world = iPos.xyz + right + upv;
+  vec4 clip = uViewProj * vec4(world, 1.0);
+  vDist = clip.w;
+  gl_Position = clip;
+}`;
+
+const TREE_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+in float vDist;
+in float vHue;
+uniform vec3 uFogColor;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform vec3 uSunColor;
+uniform vec3 uAmbient;
+out vec4 frag;
+float sdCircle(vec2 p, vec2 c, float r){ return length(p-c)-r; }
+float sdBox(vec2 p, vec2 c, vec2 b){ vec2 d=abs(p-c)-b; return length(max(d,0.0))+min(max(d.x,d.y),0.0); }
+void main(){
+  vec2 p = vUV;
+  // trunk: a thin box at the base
+  float trunk = sdBox(p, vec2(0.0, -0.30), vec2(0.045, 0.20));
+  // canopy: a soft blob (3 overlapping circles) up top
+  float c1 = sdCircle(p, vec2(0.0, 0.12), 0.30);
+  float c2 = sdCircle(p, vec2(-0.16, 0.0), 0.22);
+  float c3 = sdCircle(p, vec2(0.16, 0.02), 0.22);
+  float canopy = min(c1, min(c2, c3));
+  float tree = min(trunk, canopy);
+  float aa = fwidth(tree) + 1e-4;
+  float cover = 1.0 - smoothstep(0.0, aa, tree);
+  if (cover < 0.01) discard;
+  // color: forest green (hue-shifted a touch per tree), trunk brown
+  float canMask = 1.0 - smoothstep(0.0, 0.01, canopy);
+  vec3 green = mix(vec3(0.16,0.36,0.18), vec3(0.30,0.50,0.24), vHue);
+  // simple form light: brighter on the upper-left of the canopy
+  float lit = 0.7 + 0.4 * smoothstep(-0.3, 0.5, p.y - p.x*0.3);
+  vec3 col = mix(vec3(0.32,0.21,0.12), green*lit, canMask);
+  col *= (uAmbient + uSunColor) * 0.6;
+  float fog = clamp((vDist-uFogNear)/(uFogFar-uFogNear),0.0,1.0); fog*=fog;
+  frag = vec4(mix(col, uFogColor, fog), cover);
+}`;
+
+// Instanced CHIMNEY SMOKE — a stack of soft puffs rising from each settlement. Each
+// puff RISES + drifts + expands + fades on a loop in the vertex/fragment shaders,
+// phased per-puff so the column is continuous. Instances BAKED per settlement.
+const SMOKE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;   // -0.5..0.5 quad
+layout(location=1) in vec4 iPos;      // x, baseY, z, seed
+uniform mat4 uViewProj;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+uniform float uTime;
+out vec2 vUV;
+out float vDist;
+out float vLife;     // 0 fresh .. 1 dissipated
+void main(){
+  vUV = aCorner;
+  float seed = iPos.w;
+  // each puff loops on its own clock; staggered by seed so the column is unbroken
+  float life = fract(uTime * 0.16 + seed);
+  vLife = life;
+  float rise = life * 13.0;                         // climbs ~13 world units
+  float drift = sin(seed * 20.0 + life * 3.0) * 3.0 * life;   // lazy sideways drift
+  float grow = 1.4 + life * 3.6;                    // puffs expand as they rise
+  vec3 c = iPos.xyz + vec3(drift, rise, drift * 0.5);
+  vec3 world = c + uCamRight * (aCorner.x * grow) + uCamUp * ((aCorner.y + 0.5) * grow);
+  vec4 clip = uViewProj * vec4(world, 1.0);
+  vDist = clip.w;
+  gl_Position = clip;
+}`;
+
+const SMOKE_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+in float vDist;
+in float vLife;
+uniform float uNight;
+out vec4 frag;
+void main(){
+  float r = length(vUV);
+  float soft = smoothstep(0.5, 0.0, r);             // round soft puff
+  // fade in quickly, then out over its life; tasteful but readable at distance
+  float a = soft * (1.0 - vLife) * smoothstep(0.0, 0.12, vLife) * 0.55;
+  if (a < 0.01) discard;
+  // smoke greys, a touch warmer/darker at the source, cooler as it thins
+  vec3 col = mix(vec3(0.55,0.52,0.50), vec3(0.80,0.82,0.85), vLife);
+  col *= mix(1.0, 0.5, uNight);                      // dimmer at night
+  frag = vec4(col, a);
 }`;
 
 // ----------------------------------------------------------------- GL utilities
@@ -453,6 +737,7 @@ export class GL3D {
     this._onRestored = () => {
       this.lost = false; this._initGL();
       this._buildTerrain(); this._buildWater(); this._buildSpriteQuad(); this._buildBoxMesh();
+      this._buildTrees(); this._buildSmokeQuad();
       this._ownerDirty = true;
     };
     canvas.addEventListener('webglcontextlost', this._onLost, false);
@@ -479,6 +764,8 @@ export class GL3D {
     this._buildWater();
     this._buildSpriteQuad();
     this._buildBoxMesh();
+    this._buildTrees();        // baked forest billboards (sway in-shader)
+    this._buildSmokeQuad();    // chimney-smoke quad + dynamic instance buffer
     this.overlay = 0.85;       // nation-overlay strength (adapter can tune by zoom)
   }
 
@@ -494,7 +781,7 @@ export class GL3D {
 
     this.progTerrain = program(gl, TERRAIN_VS, TERRAIN_FS);
     this.uTerrain = uloc(gl, this.progTerrain,
-      ['uViewProj','uSunDir','uSunColor','uAmbient','uFogColor','uFogNear','uFogFar','uOverlay']);
+      ['uViewProj','uSunDir','uSunColor','uAmbient','uFogColor','uFogNear','uFogFar','uOverlay','uTime','uCloud']);
 
     this.progWater = program(gl, WATER_VS, WATER_FS);
     this.uWater = uloc(gl, this.progWater,
@@ -502,11 +789,19 @@ export class GL3D {
 
     this.progSprite = program(gl, SPRITE_VS, SPRITE_FS);
     this.uSprite = uloc(gl, this.progSprite,
-      ['uViewProj','uCamRight','uCamUp','uPxScale','uFogColor','uFogNear','uFogFar']);
+      ['uViewProj','uCamRight','uCamUp','uTime','uPxScale','uFogColor','uFogNear','uFogFar']);
 
     this.progBuild = program(gl, BUILD_VS, BUILD_FS);
     this.uBuild = uloc(gl, this.progBuild,
-      ['uViewProj','uSunDir','uSunColor','uAmbient','uFogColor','uFogNear','uFogFar']);
+      ['uViewProj','uSunDir','uSunColor','uAmbient','uFogColor','uFogNear','uFogFar','uNight']);
+
+    this.progTree = program(gl, TREE_VS, TREE_FS);
+    this.uTree = uloc(gl, this.progTree,
+      ['uViewProj','uCamRight','uCamUp','uTime','uFogColor','uFogNear','uFogFar','uSunColor','uAmbient']);
+
+    this.progSmoke = program(gl, SMOKE_VS, SMOKE_FS);
+    this.uSmoke = uloc(gl, this.progSmoke,
+      ['uViewProj','uCamRight','uCamUp','uTime','uNight']);
   }
 
   // ------------------------------------------------------------- terrain mesh
@@ -675,7 +970,9 @@ export class GL3D {
 
   // ------------------------------------------------------------- sprite VAO
   // One unit quad (corner attrib, divisor 0) + an instance buffer (divisor 1)
-  // holding pos(3) + data(4) + meta(2) = 9 floats per instance.
+  // holding pos(3) + data(4) + meta(2) + anim(3) = 12 floats per instance. The
+  // extra anim vector (phase, speed, packedState) lets the whole crowd walk/strike/
+  // carry/die in ONE draw call, animated in-shader from uTime.
   _buildSpriteQuad() {
     const gl = this.gl;
     const corners = new Float32Array([
@@ -694,7 +991,7 @@ export class GL3D {
     // instance buffer (dynamic)
     this._instBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this._instBuf);
-    const stride = 9 * 4;
+    const stride = 12 * 4;
     // iPos (loc 1) : 3 floats
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, stride, 0);
@@ -707,6 +1004,10 @@ export class GL3D {
     gl.enableVertexAttribArray(3);
     gl.vertexAttribPointer(3, 2, gl.FLOAT, false, stride, 7 * 4);
     gl.vertexAttribDivisor(3, 1);
+    // iAnim (loc 4) : 3 floats  (phase, speed, packedState)
+    gl.enableVertexAttribArray(4);
+    gl.vertexAttribPointer(4, 3, gl.FLOAT, false, stride, 9 * 4);
+    gl.vertexAttribDivisor(4, 1);
 
     gl.bindVertexArray(null);
   }
@@ -765,6 +1066,112 @@ export class GL3D {
     gl.bindVertexArray(null);
   }
 
+  // ------------------------------------------------------------- trees (baked)
+  // Scan the heightmap ONCE for FOREST tiles and bake a forest of swaying tree
+  // billboards into a static instance buffer. Per-instance: world pos + size, plus
+  // (phase, hueShift) so each tree sways out of phase and varies in tint. The whole
+  // forest is ONE instanced draw call; sway is entirely in-shader (free per frame).
+  _buildTrees() {
+    const gl = this.gl, W = this.world, w = W.w, h = W.h, biome = W.biome;
+    const ox = -this.cx, oz = -this.cz;
+    // deterministic hash for stable placement/jitter (no per-frame churn)
+    const hash = (n) => { let x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); };
+    // budget: subsample dense forests so huge maps stay cheap (target <~6k trees).
+    const forestTiles = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (biome[y * w + x] === BIOME.FOREST) forestTiles.push(y * w + x);
+    }
+    const cap = 6000;
+    const stepN = Math.max(1, Math.ceil(forestTiles.length / cap));
+    const list = [];
+    for (let k = 0; k < forestTiles.length; k += stepN) {
+      const i = forestTiles[k];
+      const x = i % w, y = (i / w) | 0;
+      // 1–2 trees per kept tile, jittered within the tile for an organic clump
+      const cnt = hash(i * 1.7) > 0.45 ? 2 : 1;
+      for (let c = 0; c < cnt; c++) {
+        const jx = (hash(i + c * 31.1) - 0.5) * 0.8;
+        const jz = (hash(i + c * 57.7) - 0.5) * 0.8;
+        const wx = x + 0.5 + jx, wz = y + 0.5 + jz;
+        const gy = this.heightAt(wx, wz);
+        const size = 2.4 + hash(i + c * 91.3) * 2.2;
+        list.push(wx + ox, gy, wz + oz, size, hash(i + c * 7.0), hash(i + c * 19.0));
+      }
+    }
+    this._treeCount = (list.length / 6) | 0;
+    const data = new Float32Array(list);
+
+    if (this.vaoTree) gl.deleteVertexArray(this.vaoTree);
+    this.vaoTree = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoTree);
+    // shared corner quad
+    const corners = new Float32Array([-0.5,-0.5, 0.5,-0.5, 0.5,0.5, -0.5,-0.5, 0.5,0.5, -0.5,0.5]);
+    const cbuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+    gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    // baked instance buffer: iPos(4) + iVar(2) = 6 floats
+    const ibuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const stride = 6 * 4;
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, stride, 0);  gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, 16); gl.vertexAttribDivisor(2, 1);
+    gl.bindVertexArray(null);
+    this._treeBuf = ibuf;
+  }
+
+  // ------------------------------------------------------------- smoke quad
+  // A shared corner quad + a dynamic instance buffer of smoke-puff sources. Each
+  // settlement seeds a small column of puffs (rise/drift/fade animated in-shader).
+  // Rebuilt only when the settlement set changes — not per frame.
+  _buildSmokeQuad() {
+    const gl = this.gl;
+    if (this.vaoSmoke) gl.deleteVertexArray(this.vaoSmoke);
+    this.vaoSmoke = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoSmoke);
+    const corners = new Float32Array([-0.5,-0.5, 0.5,-0.5, 0.5,0.5, -0.5,-0.5, 0.5,0.5, -0.5,0.5]);
+    const cbuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+    gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    this._smokeBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._smokeBuf);
+    // iPos(4): x, baseY, z, seed
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(1, 1);
+    gl.bindVertexArray(null);
+    this._smokeCount = 0;
+    this._smokeKey = -1;        // forces a (re)build on first draw
+  }
+
+  // (re)bake the smoke instance buffer from current settlements (PUFFS_PER stacks).
+  _rebuildSmoke() {
+    const gl = this.gl, sim = this.sim, S = sim.settlements;
+    const ox = -this.cx, oz = -this.cz;
+    const PUFFS = 5;
+    const n = Math.min(S.length, 400);    // cap columns for huge worlds
+    const data = new Float32Array(n * PUFFS * 4);
+    let o = 0;
+    for (let i = 0; i < n; i++) {
+      const s = S[i];
+      const tier = (typeof s.tier === 'number') ? s.tier : 0;
+      // chimney sits a touch above the rooftops, near the settlement centre
+      const baseY = this.heightAt(s.x, s.y) + 2.0 + tier * 0.6;
+      const wx = s.x + 0.5 + ox, wz = s.y + 0.5 + oz;
+      for (let p = 0; p < PUFFS; p++) {
+        data[o] = wx; data[o+1] = baseY; data[o+2] = wz;
+        data[o+3] = (i * 0.37 + p / PUFFS) % 1;   // staggered loop seed
+        o += 4;
+      }
+    }
+    this._smokeCount = n * PUFFS;
+    gl.bindVertexArray(this.vaoSmoke);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._smokeBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    this._smokeKey = S.length;
+  }
+
   _ensureBuild(n) {
     const need = n * 10;
     if (!this._buildInst || this._buildInst.length < need) {
@@ -776,12 +1183,12 @@ export class GL3D {
   }
 
   _ensureInst(n) {
-    const need = n * 9;
+    const need = n * 12;
     if (!this._inst || this._inst.length < need) {
       let cap = this._inst ? this._inst.length : 4096;
       while (cap < need) cap <<= 1;
       this._inst = new Float32Array(cap);
-      this._instCap = (cap / 9) | 0;
+      this._instCap = (cap / 12) | 0;
     }
     return this._inst;
   }
@@ -842,35 +1249,75 @@ export class GL3D {
     const camRight = [v[0], v[4], v[8]];
     const camUp    = [v[1], v[5], v[9]];
 
-    // sun: a fixed warm directional light from the NW-ish, slightly animated.
+    // ---- DAY-NIGHT CYCLE: a smooth sun ARC across the sky over the day, driving
+    //      the light direction AND the sky/ambient/fog palette (dawn → noon → dusk
+    //      → night → dawn). Everything eases; nothing snaps. ----
     const t = (this.sim.tick || 0);
-    const sunAng = 0.9 + Math.sin(t * 0.0015) * 0.15;
-    const sx = Math.cos(sunAng), syy = 0.8, sz = Math.sin(sunAng) * 0.6;
+    this._dayT = (t * 0.0006) % (Math.PI * 2);    // full day ~ every ~10k ticks
+    const day = this._dayT;
+    // sun rises in the east (+X), arcs overhead, sets in the west. elevation = sin.
+    const elev = Math.sin(day);                    // -1 (midnight) .. +1 (noon)
+    const azim = Math.cos(day);                    // E/W sweep
+    let sx = azim, syy = Math.max(0.06, elev * 0.95 + 0.05), sz = 0.45 * Math.cos(day * 0.5 + 0.7);
     const sl = Math.hypot(sx, syy, sz) || 1;
     const sun = [sx/sl, syy/sl, sz/sl];
+    // daylight factor 0 night .. 1 noon (smooth), plus a golden-hour weight near 0.
+    const dayl = Math.max(0, elev);                          // 0 below horizon
+    const daylight = Math.min(1, dayl * 1.6 + 0.06);         // ambient floor at night
+    const golden = Math.max(0, 1 - Math.abs(elev) * 4) * Math.max(0, Math.sign(elev) + 0.4);
+    this._daylight = daylight; this._golden = golden;
 
-    const fogColor = [0.62, 0.71, 0.83];
+    // sky color: night indigo → dawn/dusk warm → day blue. mix by daylight + golden.
+    const night = [0.05, 0.07, 0.14], dayC = [0.52, 0.64, 0.80], warm = [0.86, 0.55, 0.40];
+    const sky = [
+      night[0] + (dayC[0]-night[0])*daylight + warm[0]*golden*0.5,
+      night[1] + (dayC[1]-night[1])*daylight + warm[1]*golden*0.4,
+      night[2] + (dayC[2]-night[2])*daylight + warm[2]*golden*0.25,
+    ];
+    // sun light color: warm gold at horizon, neutral-bright at noon, dim blue night.
+    const sunCol = [
+      0.35 + daylight*0.7 + golden*0.55,
+      0.38 + daylight*0.62 + golden*0.25,
+      0.46 + daylight*0.46 - golden*0.10,
+    ];
+    // ambient: cool sky-bounce, lifts with daylight (never pure black at night).
+    const amb = [
+      0.10 + daylight*0.30, 0.12 + daylight*0.32, 0.18 + daylight*0.36,
+    ];
+    this._sun = sun; this._sunCol = sunCol; this._amb = amb;
+
+    const fogColor = [sky[0]*0.92+0.04, sky[1]*0.92+0.05, sky[2]*0.92+0.06];
     const fogNear = cam.dist * 0.9;
     const fogFar  = far * 0.85;
+    this._fogColor = fogColor; this._fogNear = fogNear; this._fogFar = fogFar;
+    this._animTime = t;
+    // clouds drift slowly across the map (NW→SE), independent of the sun.
+    this._cloudX = t * 0.22;
+    this._cloudZ = t * 0.10;
 
-    gl.clearColor(0.52, 0.64, 0.80, 1.0);
+    gl.clearColor(sky[0], sky[1], sky[2], 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // --- TERRAIN ---
     gl.useProgram(this.progTerrain);
     gl.uniformMatrix4fv(this.uTerrain.uViewProj, false, this._vp);
     gl.uniform3fv(this.uTerrain.uSunDir, sun);
-    gl.uniform3f(this.uTerrain.uSunColor, 1.05, 1.0, 0.92);
-    gl.uniform3f(this.uTerrain.uAmbient, 0.38, 0.42, 0.50);
+    gl.uniform3fv(this.uTerrain.uSunColor, sunCol);
+    gl.uniform3fv(this.uTerrain.uAmbient, amb);
     gl.uniform3fv(this.uTerrain.uFogColor, fogColor);
     gl.uniform1f(this.uTerrain.uFogNear, fogNear);
     gl.uniform1f(this.uTerrain.uFogFar, fogFar);
     gl.uniform1f(this.uTerrain.uOverlay, this.overlay ?? 0.85);
+    gl.uniform1f(this.uTerrain.uTime, t);
+    gl.uniform2f(this.uTerrain.uCloud, this._cloudX || 0, this._cloudZ || 0);
     gl.enable(gl.DEPTH_TEST);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.vaoTerrain);
     gl.drawElements(gl.TRIANGLES, this._terrainCount, gl.UNSIGNED_INT, 0);
+
+    // --- TREES (baked forest billboards, sway in-shader) ---
+    this._drawTrees(camRight, camUp, sunCol, amb, fogColor, fogNear, fogFar);
 
     // --- BUILDINGS (procedural extruded skyline, instanced, lit + shadowed) ---
     this._drawBuildings(sun, fogColor, fogNear, fogFar);
@@ -899,6 +1346,9 @@ export class GL3D {
     gl.depthMask(true);
     gl.disable(gl.BLEND);
 
+    // --- CHIMNEY SMOKE (rising puffs, translucent, depth-tested, no depth write) ---
+    this._drawSmoke(camRight, camUp);
+
     gl.bindVertexArray(null);
   }
 
@@ -906,6 +1356,12 @@ export class GL3D {
   // Build the per-instance array on the CPU (shadows first so they draw under the
   // bodies), distance-culling agents far outside the camera target, then ONE
   // instanced draw call. This is the scale win: 2000-5000 agents = 1 draw call.
+  //
+  // ANIMATION: per agent we also pack (phase, speed, state) into iAnim so the GPU
+  // walks/strikes/carries/dies the whole crowd from one uTime uniform. The CPU only
+  // writes flat floats — no per-agent objects, no per-limb math here. `state` packs
+  //   facing (heading angle/τ in the fraction) + carry/combat/fade flags in the int
+  // part, decoded in the vertex shader.
   _drawSprites(camRight, camUp, fogColor, fogNear, fogFar) {
     const gl = this.gl, sim = this.sim, W = this.world;
     const A = sim.pool.agents, n = A.length;
@@ -920,24 +1376,47 @@ export class GL3D {
     const inst = this._ensureInst(n + sim.settlements.length + 64);
     let head = 0;   // float write head
 
+    // renderer-owned animation state (NEVER mutates the sim). Keyed by agent slot:
+    //  _combatPulse : decays a strike pulse (1→0) — re-armed when a fights this tick
+    //  _faceHold    : last travel heading (rad) so a stopped agent keeps facing,
+    //                 not snapping to 0 when velocity vanishes.
+    if (!this._combatPulse || this._combatPulse.length < n) {
+      this._combatPulse = new Float32Array(n);
+      this._faceHold = new Float32Array(n);
+    }
+    const pulse = this._combatPulse, faceHold = this._faceHold;
+    // frame dt for pulse decay (clock from sim tick; ~constant-rate, robust enough)
+    const nowT = (this.sim.tick || 0);
+    const dPulse = 0.10;   // strike pulse fades over ~10 combat-free frames (eased)
+
+    // animation time (seconds-ish): drives all gait/breath phases in-shader.
+    const animTime = nowT * 0.05;
+
     // tribe hue -> rgb cache (cheap, rebuilt per frame from a small Map)
     const hueRGB = this._hueCache || (this._hueCache = new Map());
     const hueOf = this._hueOf;   // adapter-supplied override (player accents etc.)
 
-    const pushSprite = (wx, wy, wz, size, r, g, b, kind, bright) => {
+    const pushSprite = (wx, wy, wz, size, r, g, b, kind, bright, phase, speed, state) => {
       const o = head;
       inst[o] = wx; inst[o+1] = wy; inst[o+2] = wz;
       inst[o+3] = size; inst[o+4] = r; inst[o+5] = g; inst[o+6] = b;
       inst[o+7] = kind; inst[o+8] = bright;
-      head += 9;
+      inst[o+9] = phase; inst[o+10] = speed; inst[o+11] = state;
+      head += 12;
     };
 
-    // FIGURES: shadow (flat disc) + a human-ish billboard standing on the ground.
+    const TAU = Math.PI * 2;
+    // pack facing(0..1) + flags into one float the VS decodes:
+    //   fract = facing ; +1 carry ; +(combat*2) ; +(fade*8)
+    const packState = (facing01, carry, combat3, fade15) =>
+      facing01 + carry + combat3 * 2 + fade15 * 8;
+
+    // FIGURES: shadow (flat disc) + an articulated billboard standing on the ground.
     // kind 0 = civilian, 3 = soldier (warrior/ranger), 4 = boat/vehicle crew.
     let drawn = 0;
     for (let i = 0; i < n; i++) {
       const a = A[i];
-      if (!a.alive) continue;
+      if (!a.alive) { pulse[i] = 0; continue; }
       const dx = a.x - ctx2, dz = a.y - ctz2;
       if (dx*dx + dz*dz > camR2) continue;     // distance cull
       const gy = this.heightAt(a.x, a.y);
@@ -959,12 +1438,35 @@ export class GL3D {
       else if (a.role === 1 || a.role === 2) { kind = 3;               // soldier — steel-shift
         rr = rgb.r*0.7 + 0.18; gg = rgb.g*0.7 + 0.18; bb = rgb.b*0.7 + 0.22; }
 
-      // shadow (flat, on the ground) — sized to the footprint, not the height
-      pushSprite(wx, gy + 0.05, wz, size * 0.7, 0, 0, 0, 2, 1);
-      // figure (billboard, stands up from the ground)
-      pushSprite(wx, gy, wz, size, rr, gg, bb, kind, bright);
+      // --- ANIMATION INPUTS (all read-only from the agent) ---
+      // speed: 0 idle .. 1 run, from velocity magnitude (eased into a 0..1 ramp).
+      const spd = Math.min(1, Math.hypot(a.vx, a.vy) * 2.2);
+      // facing: heading of travel; hold last heading when basically still.
+      let heading;
+      if (spd > 0.06) { heading = Math.atan2(a.vy, a.vx); faceHold[i] = heading; }
+      else heading = faceHold[i];
+      let facing01 = (heading / TAU) % 1; if (facing01 < 0) facing01 += 1;
+      // per-agent phase from id → the crowd walks out of phase in one draw call.
+      const phase = ((a.id * 0.61803398875) % 1 + 1) % 1;
+      // combat pulse: consume the one-frame attack flag (the renderer contract —
+      // every sibling renderer reads+clears lastAct) and re-arm a decaying strike.
+      if (a.lastAct === 2) { pulse[i] = 1; a.lastAct = 0; }
+      else if (a.lastAct === 1) { a.lastAct = 0; }
+      else if (pulse[i] > 0) { pulse[i] = Math.max(0, pulse[i] - dPulse); }
+      const combat3 = pulse[i] > 0.66 ? 3 : pulse[i] > 0.33 ? 2 : pulse[i] > 0.02 ? 1 : 0;
+      // carry: holding a hauled resource
+      const carry = (a.carryType >= 0) ? 1 : 0;
+      // fade: 1 alive .. 0 dying (health near 0 sinks + dissolves the figure)
+      const fade15 = Math.max(0, Math.min(15, Math.round(Math.min(1, a.health * 1.6) * 15)));
+      const state = packState(facing01, carry, combat3, fade15);
+
+      // shadow (flat, on the ground) — sized to the footprint, not the height. It
+      // gets speed in its anim slot so it can pulse subtly with each footfall.
+      pushSprite(wx, gy + 0.05, wz, size * 0.7, 0, 0, 0, 2, 1, phase, spd, 0);
+      // figure (articulated billboard, stands up from the ground)
+      pushSprite(wx, gy, wz, size, rr, gg, bb, kind, bright, phase, spd, state);
       drawn++;
-      if (head + 18 > inst.length) break;   // safety (buffer cap)
+      if (head + 24 > inst.length) break;   // safety (buffer cap)
     }
 
     // far-zoom city banner dots (the readable settlement marker when zoomed way
@@ -980,12 +1482,12 @@ export class GL3D {
         const rgb = hsl2rgb(hue, 0.62, 0.66);
         const tier = (typeof s.tier === 'number') ? s.tier : 0;
         const size = 2.6 + tier * 1.2;
-        pushSprite(wx, gy + 3.5 + tier * 2, wz, size, rgb.r, rgb.g, rgb.b, 1, 1.0);
-        if (head + 9 > inst.length) break;
+        pushSprite(wx, gy + 3.5 + tier * 2, wz, size, rgb.r, rgb.g, rgb.b, 1, 1.0, 0, 0, 0);
+        if (head + 12 > inst.length) break;
       }
     }
 
-    const instances = (head / 9) | 0;
+    const instances = (head / 12) | 0;
     this._lastDrawn = drawn;
     if (instances === 0) return;
 
@@ -994,6 +1496,7 @@ export class GL3D {
     gl.uniformMatrix4fv(this.uSprite.uViewProj, false, this._vp);
     gl.uniform3fv(this.uSprite.uCamRight, camRight);
     gl.uniform3fv(this.uSprite.uCamUp, camUp);
+    gl.uniform1f(this.uSprite.uTime, animTime);
     gl.uniform1f(this.uSprite.uPxScale, 1.0);
     gl.uniform3fv(this.uSprite.uFogColor, fogColor);
     gl.uniform1f(this.uSprite.uFogNear, fogNear);
@@ -1012,6 +1515,59 @@ export class GL3D {
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, instances);
     gl.enable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
+  }
+
+  // ------------------------------------------------------------- trees (draw)
+  // ONE instanced draw call for the whole swaying forest. The instance buffer is
+  // baked (static); per-frame cost is just the uniform set + draw. Alpha-blended so
+  // the canopy/trunk silhouette reads cleanly; depth-written so figures occlude.
+  _drawTrees(camRight, camUp, sunCol, amb, fogColor, fogNear, fogFar) {
+    const gl = this.gl;
+    if (!this._treeCount) return;
+    gl.useProgram(this.progTree);
+    gl.uniformMatrix4fv(this.uTree.uViewProj, false, this._vp);
+    gl.uniform3fv(this.uTree.uCamRight, camRight);
+    gl.uniform3fv(this.uTree.uCamUp, camUp);
+    gl.uniform1f(this.uTree.uTime, (this._animTime || 0) * 0.05);
+    gl.uniform3fv(this.uTree.uFogColor, fogColor);
+    gl.uniform1f(this.uTree.uFogNear, fogNear);
+    gl.uniform1f(this.uTree.uFogFar, fogFar);
+    gl.uniform3fv(this.uTree.uSunColor, sunCol);
+    gl.uniform3fv(this.uTree.uAmbient, amb);
+    gl.bindVertexArray(this.vaoTree);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(true);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this._treeCount);
+    gl.enable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+  }
+
+  // ------------------------------------------------------------- smoke (draw)
+  // Rising chimney puffs. Instance buffer rebaked only when settlements change; the
+  // rise/drift/expand/fade is all in-shader, so per-frame cost is one draw call.
+  _drawSmoke(camRight, camUp) {
+    const gl = this.gl;
+    if (this._smokeKey !== this.sim.settlements.length) this._rebuildSmoke();
+    if (!this._smokeCount) return;
+    gl.useProgram(this.progSmoke);
+    gl.uniformMatrix4fv(this.uSmoke.uViewProj, false, this._vp);
+    gl.uniform3fv(this.uSmoke.uCamRight, camRight);
+    gl.uniform3fv(this.uSmoke.uCamUp, camUp);
+    gl.uniform1f(this.uSmoke.uTime, (this._animTime || 0) * 0.05);
+    gl.uniform1f(this.uSmoke.uNight, 1.0 - (this._daylight ?? 1.0));
+    gl.bindVertexArray(this.vaoSmoke);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(false);                 // smoke doesn't occlude; draws over
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this._smokeCount);
+    gl.depthMask(true);
+    gl.enable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
   }
 
   // ------------------------------------------------------------- buildings
@@ -1082,11 +1638,12 @@ export class GL3D {
     gl.useProgram(this.progBuild);
     gl.uniformMatrix4fv(this.uBuild.uViewProj, false, this._vp);
     gl.uniform3fv(this.uBuild.uSunDir, sun);
-    gl.uniform3f(this.uBuild.uSunColor, 1.05, 1.0, 0.92);
-    gl.uniform3f(this.uBuild.uAmbient, 0.40, 0.44, 0.52);
+    gl.uniform3fv(this.uBuild.uSunColor, this._sunCol || [1.05, 1.0, 0.92]);
+    gl.uniform3fv(this.uBuild.uAmbient, this._amb || [0.40, 0.44, 0.52]);
     gl.uniform3fv(this.uBuild.uFogColor, fogColor);
     gl.uniform1f(this.uBuild.uFogNear, fogNear);
     gl.uniform1f(this.uBuild.uFogFar, fogFar);
+    gl.uniform1f(this.uBuild.uNight, 1.0 - (this._daylight ?? 1.0));
 
     gl.bindVertexArray(this.vaoBuild);
     gl.bindBuffer(gl.ARRAY_BUFFER, this._buildInstBuf);
@@ -1159,10 +1716,14 @@ export class GL3D {
       gl.deleteProgram(this.progWater);
       gl.deleteProgram(this.progSprite);
       gl.deleteProgram(this.progBuild);
+      gl.deleteProgram(this.progTree);
+      gl.deleteProgram(this.progSmoke);
       if (this.vaoTerrain) gl.deleteVertexArray(this.vaoTerrain);
       if (this.vaoWater) gl.deleteVertexArray(this.vaoWater);
       if (this.vaoSprite) gl.deleteVertexArray(this.vaoSprite);
       if (this.vaoBuild) gl.deleteVertexArray(this.vaoBuild);
+      if (this.vaoTree) gl.deleteVertexArray(this.vaoTree);
+      if (this.vaoSmoke) gl.deleteVertexArray(this.vaoSmoke);
     } catch { /* context already gone */ }
   }
 }

@@ -98,6 +98,8 @@
       } catch (e) {
         fail('Renderer3D init failed: ' + (e && e.stack || e)); return;
       }
+      // expose handles for headless verification / perf probing (demo-only)
+      window.__aeon = { sim, cam, r };
 
       function resize() {
         const w = window.innerWidth, h = window.innerHeight;
