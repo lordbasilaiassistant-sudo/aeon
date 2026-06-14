@@ -34,6 +34,7 @@ export class Game {
     this.selected = [];           // hand-selected units (your soldiers)
     this.selBox = null;           // live selection rectangle (world coords) for the renderer
     this.foundMode = false;       // when true, the next click founds a new city
+    this.gameOver = null;         // 'defeat' | 'victory' once the run ends (#8 fail-state)
     this.keys = new Set();
     this.acc = 0;                 // sim-step accumulator
 
@@ -188,7 +189,14 @@ export class Game {
   }
 
   setPolicy(key, val) {
-    if (this.playerTribe) this.gov.setPolicy(this.sim, this.playerTribe, key, val);
+    if (!this.playerTribe) return;
+    // Legislating = taking the throne: the leader-AI (autopilot, #10) stands down so YOUR will
+    // sticks instead of being overwritten each year. You rule by law now; your council steps back.
+    if (this.playerTribe.autopilot) {
+      this.playerTribe.autopilot = false;
+      this.ui.toast({ type: 'info', msg: '👑 You take the throne — your council steps back. You rule now.' });
+    }
+    this.gov.setPolicy(this.sim, this.playerTribe, key, val);
   }
 
   // ---------------------------------------------------------------- army command
@@ -334,7 +342,16 @@ export class Game {
       if (this.acc > interval * 5) this.acc = 0; // avoid spiral of death
     }
 
-    // keep player tribe alive reference
+    // FAIL-STATE (#8): the player's nation is exempt from the extinction cull, so it is never
+    // removed from the map — we must detect a wipe DIRECTLY here, or you soft-lock at 0 souls with
+    // no game-over. A real defeat: pause the world, tell the player, surface an end screen if present.
+    if (this.playerTribe && this.playerTribe.members === 0 && !this.gameOver) {
+      this.gameOver = 'defeat';
+      this.speedIdx = 0; this.ui.setSpeed(0);   // the world stops when your people are gone
+      this.ui.toast({ type: 'extinct', msg: `${this.playerTribe.name} is no more. Your people have died out.`, color: this.playerTribe.hue });
+      if (this.ui.showEndScreen) this.ui.showEndScreen('defeat', this.playerTribe, this);
+    }
+    // legacy path: if a player tribe were ever removed outright, drop back out cleanly
     if (this.playerTribe && !this.sim.tribes.has(this.playerTribe.id)) {
       this.ui.toast({ type: 'extinct', msg: `${this.playerTribe.name} has fallen`, color: this.playerTribe.hue });
       this.ascend();

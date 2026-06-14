@@ -175,6 +175,10 @@ export class Sim {
     this.tech.initTribe(tribe); this.civics.initTribe(tribe); this.anthro.initTribe(tribe);
     this.culture.initTribe(tribe, this.rng);
     this.governance.ensurePolicy(tribe);
+    // LEADER-AI v0 (control model #10): a player's nation is NEVER unmanaged. Until the human
+    // legislates/acts, a conservative auto-ruler keeps it viable (so it can't passively collapse).
+    // game.js flips this off the moment the player touches a lever ("you take the throne").
+    tribe.autopilot = true;
     for (const k in policyLean) tribe.policy[k] = Math.max(-1, Math.min(1, (tribe.policy[k] || 0) + policyLean[k]));
     for (let k = 0; k < size; k++) {
       const a = this.pool.alloc();
@@ -183,8 +187,10 @@ export class Sim {
       const py = Math.max(1, Math.min(this.world.h - 2, spot.y + this.rng.gauss(0, 4)));
       a.spawn(px, py, clone(founder, this.rng, 0.04, 0.25), tribe.id, this.rng, 0);
     }
-    // a little starting abundance so the new homeland isn't instantly brutal
-    this.world.blessFood(spot.x, spot.y, 8);
+    // a generous starting larder so a LED homeland isn't a death-trap on harsh seeds (balance:
+    // a survivable start, but thriving/winning still takes good play — not too easy, not too hard).
+    this.world.blessFood(spot.x, spot.y, 11);
+    this.world.blessFood(spot.x, spot.y, 6);
     this.emit('born', `${tribe.name} take their first breath`, spot.x, spot.y, hue);
     return tribe;
   }
@@ -314,7 +320,9 @@ export class Sim {
     this.diplomacy.tick(this);
     if (this.tick % TICKS_PER_YEAR === 0) {
       for (const tr of this.tribes.values()) {
-        if (tr.members > 0 && !tr.isPlayer) this.governance.aiTurn(this, tr);
+        if (tr.members === 0) continue;
+        if (!tr.isPlayer) this.governance.aiTurn(this, tr);             // rival nations: their own leader-AI
+        else if (tr.autopilot) this.governance.autopilotTurn(this, tr); // player's nation, hands-off: leader-AI v0 keeps it alive
       }
       this.governance.checkDestinies(this); // one-time toast when a nation fulfils its destiny
       this.assignRoles();                   // size each nation's army from its militarism
