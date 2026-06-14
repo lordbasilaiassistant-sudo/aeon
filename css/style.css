@@ -176,6 +176,10 @@ body.mode-survival #dock { display: none; }
 .tip-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
 .tip-key { background: rgba(110,168,255,0.18); color: #9cc4ff; padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; }
 .tip-desc { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+/* plain data-tip tooltip (title-replacement, used everywhere) */
+#tooltip .tip-simple { font-size: 12px; color: var(--text); line-height: 1.45; }
+#tooltip .tip-simple b { color: #9cc4ff; }
+#tooltip.tip-flip { /* arrow-less, just lets JS know it's edge-flipped */ }
 
 /* ---------- inspector panel ---------- */
 .panel { position: fixed; right: 12px; top: 60px; width: 290px; z-index: 20;
@@ -395,3 +399,61 @@ body.mode-survival #dock { display: none; }   /* (re-affirm) survival hides the 
 #onboard-x { background: rgba(255,255,255,0.08); border: 1px solid var(--border); color: var(--muted);
   border-radius: 6px; width: 22px; height: 22px; cursor: pointer; font-size: 11px; flex: none; }
 #onboard-x:hover { color: var(--text); background: rgba(255,255,255,0.16); }
+
+/* ---------- first-time Survival tutorial (coach-marks) ---------- */
+#tutorial { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center;
+  pointer-events: none; animation: fadein 0.3s ease; }
+/* a soft scrim only behind the card so the world stays visible/legible */
+#tutorial::before { content: ''; position: absolute; inset: 0;
+  background: radial-gradient(120% 80% at 50% 120%, rgba(5,7,12,0.55), rgba(5,7,12,0) 60%); }
+.tut-card { position: relative; pointer-events: auto; margin-bottom: 96px; width: min(440px, 92vw);
+  background: var(--panel-solid); border: 1px solid var(--accent); border-radius: 16px;
+  padding: 22px 24px 18px; box-shadow: 0 18px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(110,168,255,0.15); }
+.tut-step-ico { font-size: 30px; line-height: 1; margin-bottom: 10px; }
+.tut-card h3 { font-size: 18px; font-weight: 800; margin-bottom: 8px;
+  background: linear-gradient(120deg, #9cc4ff, #f0c869); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tut-card p { font-size: 13.5px; color: #c4cddd; line-height: 1.6; }
+.tut-card p b { color: var(--gold); font-weight: 700; }
+.tut-card .tut-keys { display: flex; flex-wrap: wrap; gap: 7px; margin: 11px 0 2px; }
+.tut-keys .how-key { font-size: 11px; }
+.tut-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+.tut-dots { display: flex; gap: 6px; }
+.tut-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.18); transition: all 0.2s; }
+.tut-dot.on { background: var(--accent); transform: scale(1.25); }
+.tut-btns { display: flex; gap: 8px; align-items: center; }
+.tut-skip { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 600; }
+.tut-skip:hover { color: var(--text); }
+.tut-next { background: linear-gradient(120deg, var(--accent), #4a7fd0); color: #07101e; border: none;
+  border-radius: 9px; padding: 9px 18px; font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.15s; }
+.tut-next:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(110,168,255,0.4); }
+
+/* ---------- found-mode banner (twin of the command banner) ---------- */
+#found-banner { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 30;
+  background: rgba(240,200,105,0.95); color: #1a1405; font-weight: 700; font-size: 13px; letter-spacing: 0.3px;
+  padding: 7px 18px; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
+  animation: slidedown 0.2s ease; pointer-events: none; }
+
+/* found / command buttons can be disabled with a reason (tooltip explains) */
+.nation-head button:disabled { opacity: 0.42; cursor: not-allowed; }
+.nation-head button.lit { box-shadow: 0 0 0 1px var(--gold), 0 0 12px rgba(240,200,105,0.4); }
+
+/* ---------- live policy effect label ---------- */
+.policy-effect { display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 10.5px; color: var(--muted); margin-top: 4px; line-height: 1.35; }
+.policy-effect b { color: #9cc4ff; font-weight: 700; }
+.policy-help { font-size: 10px; color: #6b7689; margin-top: 2px; line-height: 1.35; }
+
+/* ---------- how-to-play reference (reuses .modal) ---------- */
+.help-card { max-width: 600px; }
+.help-card h2 { margin-bottom: 6px; }
+.help-sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+.help-section { margin-bottom: 16px; }
+.help-section h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.help-grid { display: grid; gap: 7px; }
+.help-grid > div { font-size: 12.5px; color: #c4cddd; display: flex; gap: 10px; align-items: baseline; line-height: 1.45; }
+.help-tag { background: rgba(110,168,255,0.16); color: #9cc4ff; padding: 2px 8px; border-radius: 6px;
+  font-size: 10.5px; font-weight: 700; white-space: nowrap; min-width: 64px; text-align: center; flex: none; }
+.help-tag.gold { background: rgba(240,200,105,0.18); color: var(--gold); }
+.help-win { font-size: 12.5px; color: #c4cddd; line-height: 1.6; }
+.help-win b { color: var(--gold); }
+.help-lose { color: var(--danger); }

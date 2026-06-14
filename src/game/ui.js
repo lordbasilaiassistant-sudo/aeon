@@ -29,12 +29,54 @@ const TOOL_INFO = {
 const CONTROLS = [
   ['Scroll', 'zoom — one continuous space from orbit to the ground'],
   ['Drag', 'pan the world'],
+  ['Shift+Drag', 'orbit the camera (3D view)'],
   ['Space', 'pause / resume'],
   ['1 – 5', 'simulation speed'],
   ['[  ]', 'shrink / grow the tool brush'],
   ['Esc', 'release a body · ascend · close panels'],
   ['W A S D', 'move the body you possess'],
 ];
+
+// Policy sliders: label, slider-end words, hover tip + a LIVE effect readout so
+// the player sees cause -> effect. The live text is derived from the value below.
+const POLICIES = [
+  { key: 'aggression', title: 'War', lo: 'Pacifist', hi: 'Warlike',
+    tip: '<b>War footing</b> — push toward Warlike and your people raise more soldiers and strike rivals sooner; toward Pacifist they avoid fights and grow in peace.' },
+  { key: 'expansion', title: 'Expand', lo: 'Homebound', hi: 'Expansionist',
+    tip: '<b>Expansion</b> — Expansionist sends settlers out to claim land and found cities; Homebound keeps your people close and consolidated.' },
+  { key: 'breed', title: 'Growth', lo: 'Restraint', hi: 'Grow fast',
+    tip: '<b>Growth</b> — Grow fast means more births (and more mouths to feed); Restraint slows breeding to live within your food.' },
+  { key: 'research', title: 'Science', lo: 'Tradition', hi: 'Science',
+    tip: '<b>Science vs tradition</b> — Science speeds tech research at the cost of custom; Tradition deepens culture and faith but slows the tech tree.' },
+];
+
+// First-time Survival walkthrough (3–5 short, dismissible coach-marks).
+const TUTORIAL = [
+  { ico: '⚑', title: 'You lead this people',
+    body: 'You are their <b>ruler and lawgiver</b> — not a puppeteer. You set the policy and make the big calls; your neural-net citizens live their own lives within your rules. Step away and your council runs things the way you would.' },
+  { ico: '🖐', title: 'Move around the world',
+    body: '<b>Tap</b> anything to inspect it — a creature shows its living brain; a city or nation shows its story. <b>Drag</b> to pan, <b>scroll</b> to zoom from orbit down to the ground. In 3D view, hold <b>Shift</b> and drag to orbit.',
+    keys: ['Tap = inspect', 'Drag = pan', 'Scroll = zoom', 'Shift+Drag = orbit'] },
+  { ico: '🏛', title: 'Your three verbs',
+    body: '<b>Found</b> a city (10 gold) by clicking fertile land · <b>Command</b> your soldiers by drag-selecting then clicking a target · <b>Ascend</b> to step back out to a god\'s-eye view at any time.',
+    keys: ['🏛 Found', '⚔ Command', '↑ Ascend'] },
+  { ico: '🎚', title: 'Set the nation\'s will',
+    body: 'The <b>Policies</b> sliders are how you rule — war footing, expansion, growth, science. Each shows its live effect as you drag. Steer <b>Research</b> and <b>Diplomacy</b> from the tabs; the rest is up to your people\'s evolved minds.' },
+  { ico: '✦', title: 'Win — or fall',
+    body: 'Grow your people, climb the <b>tech tree</b>, adopt <b>civics</b>, and outlast your rivals. Pick a <b>Destiny</b> for a clear goal — reach enough souls, or be the last nation standing. If your people hit zero, it\'s over. Good luck.' },
+];
+
+// Map a policy value (-1..1) to a short, human-readable effect line.
+function policyEffect(key, v) {
+  const lvl = (lo, mid, hi) => (v <= -0.33 ? lo : v >= 0.33 ? hi : mid);
+  const txt = {
+    aggression: lvl('peaceful — avoids war', 'balanced stance', 'aggressive — quick to fight'),
+    expansion: lvl('staying home', 'steady spread', 'expanding fast — settling outward'),
+    breed: lvl('careful breeding', 'natural growth', 'rapid growth — watch your food'),
+    research: lvl('tradition first', 'balanced', 'science first — faster tech'),
+  }[key] || '';
+  return `<b>${(v * 100 | 0)}</b> · ${esc(txt)}`;
+}
 
 const STANCES = ['ally', 'neutral', 'rival', 'war'];
 
@@ -71,7 +113,12 @@ export class UI {
     $('insp-close').onclick = () => this.hideInspector();
     $('nation-leave').onclick = () => this.game && this.game.ascend();
     if ($('nation-army')) $('nation-army').onclick = () => this.game && this.game.musterArmy();
-    if ($('nation-found')) $('nation-found').onclick = () => this.game && this.game.foundCity();
+    if ($('nation-found')) $('nation-found').onclick = () => {
+      if (!this.game) return;
+      this.game.foundCity();
+      // mirror game.foundMode into the discoverability banner (cleared by updateStats)
+      this.setFoundBanner(!!this.game.foundMode);
+    };
     document.querySelectorAll('.civ-banner').forEach((b) => { b.onclick = () => this.setNationTab(b.dataset.tab || 'research'); });
 
     // ---- god tools: build labels, wire click + hover tooltip ----
@@ -91,6 +138,9 @@ export class UI {
     // ---- top-bar buttons ----
     $('btn-speed').onclick = () => this.game && this.game.cycleSpeed();
     $('btn-help').onclick = () => $('modal').classList.remove('hidden');
+    // the how-to-play / intro modal closes from its own button and on backdrop click
+    if ($('modal-start')) $('modal-start').onclick = () => $('modal').classList.add('hidden');
+    if ($('modal')) $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) $('modal').classList.add('hidden'); });
     $('btn-menu').onclick = () => this.toggleMenu();
     if (this.el.btnNations) this.el.btnNations.onclick = () => this.toggleNations();
 
@@ -145,6 +195,7 @@ export class UI {
       b.textContent = 'NATION'; b.className = 'mode-badge nation';
       b.style.background = hueToCss(tribe.hue, 60, 45);
       this._dismissOnboard();
+      this._maybeTutorial(); // first time leading a people -> coach-marks
     } else {
       b.textContent = 'GOD'; b.className = 'mode-badge god'; b.style.background = '';
     }
@@ -161,7 +212,7 @@ export class UI {
     if (this.openAgent && this.openAgent.alive) this.refreshAgentStats();
     else if (this.openAgent && !this.openAgent.alive) this.markDead();
     if (this.openTribe) this.refreshTribeStats();
-    if (this.game && this.game.playerTribe) this.refreshNationBar();
+    if (this.game && this.game.playerTribe) { this.refreshNationBar(); this._syncFoundState(); }
     if (this._natOpen) this.refreshNationsPanel();
     // Civ-style research/civic banners (shown only while leading a nation)
     const cb = document.getElementById('civ-banners');
@@ -442,22 +493,25 @@ export class UI {
     document.querySelectorAll('.ntab-page').forEach((p) => p.classList.toggle('hidden', p.dataset.page !== tab));
   }
 
-  // policy sliders (incl. research focus) — routed through GovernanceAPI
+  // policy sliders (incl. research focus) — routed through GovernanceAPI.
+  // Each carries a plain-language tip + a LIVE effect label so the player
+  // learns cause -> effect as they drag.
   buildPolicies(tr) {
-    const policies = [
-      ['aggression', 'Pacifist', 'Warlike'],
-      ['expansion', 'Homebound', 'Expansionist'],
-      ['breed', 'Restraint', 'Grow fast'],
-      ['research', 'Tradition', 'Science'],
-    ];
-    this.el.nationPolicies.innerHTML = policies.map(([key, lo, hi]) => {
+    this.el.nationPolicies.innerHTML = POLICIES.map(({ key, lo, hi, title, tip }) => {
       const v = (tr.policy && typeof tr.policy[key] === 'number') ? tr.policy[key] : 0;
-      return `<div class="policy">
-        <div class="policy-labels"><span>${lo}</span><span class="policy-key">${key}</span><span>${hi}</span></div>
-        <input type="range" min="-1" max="1" step="0.05" value="${v}" data-key="${key}"></div>`;
+      return `<div class="policy" data-tip="${esc(tip)}">
+        <div class="policy-labels"><span>${lo}</span><span class="policy-key">${title}</span><span>${hi}</span></div>
+        <input type="range" min="-1" max="1" step="0.05" value="${v}" data-key="${key}">
+        <div class="policy-effect"><span class="pe-now" data-eff="${key}">${policyEffect(key, v)}</span></div>
+      </div>`;
     }).join('');
     this.el.nationPolicies.querySelectorAll('input').forEach((inp) => {
-      inp.oninput = () => this._setPolicy(inp.dataset.key, +inp.value);
+      inp.oninput = () => {
+        const k = inp.dataset.key, val = +inp.value;
+        this._setPolicy(k, val);
+        const eff = this.el.nationPolicies.querySelector(`[data-eff="${k}"]`);
+        if (eff) eff.innerHTML = policyEffect(k, val);
+      };
     });
   }
 
@@ -756,6 +810,10 @@ export class UI {
       </div>
       <div class="menu-section"><h3>Lead a nation</h3>
         <p class="menu-tip">Open <b>⚑ Nations</b> (top bar) or click any people on the map, then <b>Play as</b> to lead them. Set their will with the policy sliders, steer research &amp; diplomacy, and pick a destiny to chase. You guide; their own brains decide.</p>
+        <div class="menu-btns" style="margin-top:9px;">
+          <button class="menu-btn" id="menu-howto">❔ How to play</button>
+          <button class="menu-btn" id="menu-tutorial">🎓 Replay walkthrough</button>
+        </div>
       </div>
       <div class="menu-section"><h3>Controls</h3><div class="legend">${controls}</div></div>
       <div class="menu-section"><h3>The Divine Hand</h3><div class="legend">${tools}</div></div>`;
@@ -764,6 +822,8 @@ export class UI {
     $('menu-pause').onclick = () => { if (this.game) { this.game.togglePause(); this._syncMenu(); } };
     $('menu-speed').onclick = () => { if (this.game) { this.game.cycleSpeed(); this._syncMenu(); } };
     $('menu-nations').onclick = () => { this.closeMenu(); this.openNations(); };
+    if ($('menu-howto')) $('menu-howto').onclick = () => { this.closeMenu(); $('modal').classList.remove('hidden'); };
+    if ($('menu-tutorial')) $('menu-tutorial').onclick = () => { this.closeMenu(); this.showTutorial(); };
   }
 
   _syncMenu() {
@@ -796,20 +856,149 @@ export class UI {
     setTimeout(() => d.remove(), 400);
   }
 
+  // ---- first-time Survival tutorial (coach-marks) ----------------------
+  _maybeTutorial() {
+    if (this._tutorialOpen || document.getElementById('tutorial')) return;
+    let seen = false;
+    try { seen = localStorage.getItem('aeon_tutorial_seen') === '1'; } catch { /* no storage */ }
+    if (seen) return;
+    this._startTutorial();
+  }
+
+  // public: lets the "?" / menu re-open the walkthrough on demand
+  showTutorial() {
+    if (document.getElementById('tutorial')) return;
+    this._startTutorial();
+  }
+
+  _startTutorial() {
+    this._tutorialOpen = true;
+    this._tutStep = 0;
+    const root = document.createElement('div');
+    root.id = 'tutorial';
+    root.innerHTML = `<div class="tut-card">
+        <div class="tut-step-ico"></div>
+        <h3></h3>
+        <p></p>
+        <div class="tut-keys"></div>
+        <div class="tut-foot">
+          <div class="tut-dots"></div>
+          <div class="tut-btns">
+            <button class="tut-skip">Skip</button>
+            <button class="tut-next">Next</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+    root.querySelector('.tut-skip').onclick = () => this._endTutorial();
+    root.querySelector('.tut-next').onclick = () => this._tutAdvance();
+    this._renderTutorial();
+  }
+
+  _renderTutorial() {
+    const root = document.getElementById('tutorial'); if (!root) return;
+    const s = TUTORIAL[this._tutStep];
+    root.querySelector('.tut-step-ico').textContent = s.ico;
+    root.querySelector('.tut-card h3').textContent = s.title;
+    root.querySelector('.tut-card p').innerHTML = safeTip(s.body);
+    const keys = root.querySelector('.tut-keys');
+    keys.innerHTML = (s.keys || []).map((k) => `<span class="how-key">${esc(k)}</span>`).join('');
+    keys.style.display = (s.keys && s.keys.length) ? 'flex' : 'none';
+    const dots = root.querySelector('.tut-dots');
+    dots.innerHTML = TUTORIAL.map((_, i) => `<span class="tut-dot${i === this._tutStep ? ' on' : ''}"></span>`).join('');
+    const next = root.querySelector('.tut-next');
+    next.textContent = (this._tutStep >= TUTORIAL.length - 1) ? 'Start playing' : 'Next';
+  }
+
+  _tutAdvance() {
+    if (this._tutStep >= TUTORIAL.length - 1) { this._endTutorial(); return; }
+    this._tutStep++;
+    this._renderTutorial();
+  }
+
+  _endTutorial() {
+    const root = document.getElementById('tutorial');
+    if (root) { root.style.opacity = '0'; setTimeout(() => root.remove(), 250); }
+    this._tutorialOpen = false;
+    try { localStorage.setItem('aeon_tutorial_seen', '1'); } catch { /* no storage */ }
+  }
+
+  // ---- found-mode banner (twin of setCommandBanner, for discoverability) ----
+  setFoundBanner(on) {
+    const b = document.getElementById('found-banner');
+    if (b) b.classList.toggle('hidden', !on);
+    const btn = document.getElementById('nation-found');
+    if (btn) btn.classList.toggle('lit', !!on);
+  }
+
+  // keep Found button + banner legible: clear the banner when found-mode ends,
+  // and disable the button with a why-tooltip when you can't afford a city.
+  _syncFoundState() {
+    const tr = this.game.playerTribe; if (!tr) return;
+    const btn = document.getElementById('nation-found');
+    if (btn) {
+      const gold = Math.floor(tr.gold || 0);
+      const broke = gold < 10;
+      btn.disabled = broke;
+      btn.setAttribute('data-tip', broke
+        ? `<b>Found a city</b> — needs <b>10 gold</b> (you have ${gold}). Earn gold by setting a city's focus to 🪙 gold or via trade.`
+        : '<b>Found a city</b> (10 gold) — then click fertile, open land to settle it. New cities grow your people and economy.');
+    }
+    // game clears foundMode after the click resolves; mirror that to the banner
+    if (!this.game.foundMode) this.setFoundBanner(false);
+  }
+
   // ---- tooltip ---------------------------------------------------------
   _buildTooltip() {
     this._tip = document.createElement('div');
     this._tip.id = 'tooltip';
     this._tip.className = 'hidden';
     document.body.appendChild(this._tip);
+    // Delegated data-tip system: any element (now or added later) carrying a
+    // [data-tip] attribute gets a plain-language tooltip on hover. Replaces the
+    // browser's native title=, positioned on-screen and flipped near edges.
+    document.addEventListener('mouseover', (e) => {
+      const t = e.target.closest && e.target.closest('[data-tip]');
+      if (!t || t.classList.contains('tool')) return; // .tool uses the rich tip
+      this._showDataTip(t);
+    });
+    document.addEventListener('mouseout', (e) => {
+      const t = e.target.closest && e.target.closest('[data-tip]');
+      if (t && !t.classList.contains('tool')) this._hideTip();
+    });
   }
+  // rich tip for the god-tool dock (icon + name + hotkey)
   _showTip(btn, info) {
-    const r = btn.getBoundingClientRect();
     this._tip.innerHTML = `<div class="tip-head"><b>${info.name}</b><span class="tip-key">${info.hotkey}</span></div>
       <div class="tip-desc">${esc(info.desc)}</div>`;
+    this._placeTip(btn, 'right');
+  }
+  // plain tip from a data-tip attribute (limited HTML: <b> only)
+  _showDataTip(el) {
+    const html = el.getAttribute('data-tip'); if (!html) return;
+    this._tip.innerHTML = `<div class="tip-simple">${safeTip(html)}</div>`;
+    this._placeTip(el, 'auto');
+  }
+  // place the tooltip near an element, flipping to stay on-screen
+  _placeTip(el, prefer) {
+    const r = el.getBoundingClientRect();
     this._tip.classList.remove('hidden');
-    this._tip.style.left = `${r.right + 10}px`;
-    this._tip.style.top = `${r.top}px`;
+    const tw = this._tip.offsetWidth || 220, th = this._tip.offsetHeight || 60;
+    const vw = window.innerWidth, vh = window.innerHeight, gap = 9;
+    let left, top;
+    if (prefer === 'right') {
+      // dock tools: prefer to the right, flip to the left if it would clip
+      left = (r.right + gap + tw > vw) ? r.left - gap - tw : r.right + gap;
+      top = r.top;
+    } else {
+      // auto: prefer below; flip above near the bottom edge
+      top = (r.bottom + gap + th > vh) ? r.top - gap - th : r.bottom + gap;
+      left = r.left + r.width / 2 - tw / 2;
+    }
+    left = Math.max(6, Math.min(left, vw - tw - 6));
+    top = Math.max(6, Math.min(top, vh - th - 6));
+    this._tip.style.left = `${left}px`;
+    this._tip.style.top = `${top}px`;
   }
   _hideTip() { if (this._tip) this._tip.classList.add('hidden'); }
 
@@ -913,3 +1102,7 @@ function traitColor(t) {
   return map[t] || '#9ad';
 }
 function esc(s) { return String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])); }
+// tooltip text: fully escape, then re-allow only <b>…</b> (our data-tip authoring).
+function safeTip(s) {
+  return esc(s).replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
+}
