@@ -1,6 +1,7 @@
 // Game controller: ties sim + render together, owns modes (god / nation),
 // tools (the divine hand), nation policy, and possession (the avatar bridge).
 import { Sim, TICKS_PER_YEAR } from '../sim/sim.js';
+import { ERAS } from '../sim/tech.js';
 import { Camera } from '../render/camera.js';
 import { Renderer } from '../render/renderer.js';
 import { Renderer3D } from '../render/renderer3d.js';
@@ -379,6 +380,16 @@ export class Game {
       this.speedIdx = 0; this.ui.setSpeed(0);   // the world stops when your people are gone
       this.ui.toast({ type: 'extinct', msg: `${this.playerTribe.name} is no more. Your people have died out.`, color: this.playerTribe.hue });
       if (this.ui.showEndScreen) this.ui.showEndScreen('defeat', this.playerTribe, this);
+    }
+    // VICTORY (#8): lead one evolving bloodline from the Stone Age to the Information
+    // Age (final era, index 8). A living nation that reaches it has truly won — not a
+    // soft-lock, a finish line. We stop the world and surface the same end screen.
+    if (this.playerTribe && this.playerTribe.members > 0 && !this.gameOver
+        && this.playerTribe.tech && this.playerTribe.tech.era >= ERAS.length - 1) {
+      this.gameOver = 'victory';
+      this.speedIdx = 0; this.ui.setSpeed(0);
+      this.ui.toast({ type: 'info', msg: `${this.playerTribe.name} has reached the Information Age. You win.`, color: this.playerTribe.hue });
+      if (this.ui.showEndScreen) this.ui.showEndScreen('victory', this.playerTribe, this);
     }
     // legacy path: if a player tribe were ever removed outright, drop back out cleanly
     if (this.playerTribe && !this.sim.tribes.has(this.playerTribe.id)) {

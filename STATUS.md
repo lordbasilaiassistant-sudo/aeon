@@ -52,10 +52,14 @@ Run: `npm run serve` → http://localhost:8123 (or open `index.html` via any sta
 
 ## What is still broken / the next priority (honest)
 
-1. **#8 (P0) — the player nation passively COLLAPSES and there is no fail-state.** Population trends
-   ~52 → 26 by year 30 and toward extinction. The cull exempts `isPlayer`, so there is also **no
-   game-over / defeat screen** (recon fail-state score 1.5/10). No FAILSTATE/ENDSCREEN code exists yet.
-   This is the **#1 next priority** — it blocks AEON being winnable or losable.
+1. **#8 (P0) — END SCREEN + VICTORY now SHIP; passive-collapse balance still OPEN.** AEON is now
+   winnable AND losable: `ui.showEndScreen('defeat'|'victory', tribe, game)` renders a real run-summary
+   overlay (years lived / era / peak pop / generations / cities), and `game.js` triggers **victory when
+   the player reaches the Information Age (era 8, reachable — headless hits it by ~yr 100)** and
+   **defeat when the player nation is wiped after it has lived**. Both verified in-browser. STILL OPEN:
+   the underlying survival balance — the player nation can still passively trend toward extinction
+   (~52 → 26 by yr 30) before the fail-state catches it. Next: tune hard-seed survival so collapse is a
+   *choice/consequence*, not the default.
 2. **#8 (P0) — MARCH-SURVIVE.** Ordered units do **not** forage or rest mid-march, so on a long march
    they run down and stall. In real play a 3-soldier army ordered 35 tiles closed only ~28% in 400
    ticks, even though isolated pathfinding probes arrive. Pathfinding is correct in isolation; the

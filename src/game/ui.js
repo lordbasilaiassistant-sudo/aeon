@@ -9,7 +9,7 @@
 // puppeteers individuals — it sets a nation's will and lets evolved brains act.
 import { N_IN, N_HID, N_OUT, W_IH, SENSE, ACT, GENE, gene } from '../sim/brain.js';
 import { hueToCss } from '../sim/tribe.js';
-import { TECHS } from '../sim/tech.js';
+import { TECHS, ERAS } from '../sim/tech.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1080,6 +1080,56 @@ export class UI {
   }
 
   // ---- event log toasts ----
+  // ---- end screen (#8 fail-state / victory) ----------------------------
+  // game.js detects defeat (player nation wiped) and victory (player reaches the
+  // Information Age) and calls this. It surfaces a real run-summary overlay — the
+  // thing that makes AEON winnable AND losable rather than soft-locking at 0 souls.
+  showEndScreen(kind, tribe, game) {
+    if (document.getElementById('endscreen')) return; // already up
+    const win = kind === 'victory';
+    const sim = (game && game.sim) || this._sim();
+    const yrs = (sim && tribe) ? Math.max(0, sim.year() - (tribe.foundedYear || 0)) : 0;
+    const era = (tribe && tribe.tech) ? ERAS[tribe.tech.era] || ERAS[0] : ERAS[0];
+    const peak = tribe ? (tribe.peakMembers || 0) : 0;
+    const gens = sim ? (sim.maxGen || 0) : 0;
+    const cities = (sim && tribe && sim.settleSys) ? sim.settleSys.countOf(tribe.id) : 0;
+    const name = tribe ? tribe.name : 'Your people';
+    const ico = win ? '🏛️' : '🕯️';
+    const title = win ? 'A Civilization Endures' : 'Your People Have Passed';
+    const blurb = win
+      ? `${name} carried a single evolving bloodline from the first campfire to the Information Age. ${gens} generations of real minds got you here.`
+      : `${name} has died out. Every citizen was a real neural net — what they learned is gone, but the world remembers them.`;
+    const stats = [
+      ['Years lived', yrs],
+      ['Era reached', era],
+      ['Peak population', peak],
+      ['Generations evolved', gens],
+      ['Cities founded', cities],
+    ];
+    const root = document.createElement('div');
+    root.id = 'endscreen';
+    root.className = `endscreen ${win ? 'win' : 'lose'}`;
+    root.innerHTML = `<div class="end-card">
+        <div class="end-ico">${ico}</div>
+        <h2>${esc(title)}</h2>
+        <p>${esc(blurb)}</p>
+        <div class="end-stats">${stats.map(([k, v]) =>
+          `<div class="end-stat"><span class="end-k">${esc(k)}</span><span class="end-v">${esc(v)}</span></div>`).join('')}</div>
+        <div class="end-btns">
+          <button class="end-watch">Keep watching</button>
+          <button class="end-restart">New world</button>
+        </div>
+      </div>`;
+    if (tribe) root.style.setProperty('--end-hue', hueToCss(tribe.hue));
+    document.body.appendChild(root);
+    requestAnimationFrame(() => root.classList.add('show'));
+    root.querySelector('.end-restart').onclick = () => location.reload();
+    root.querySelector('.end-watch').onclick = () => {
+      root.classList.remove('show');
+      setTimeout(() => root.remove(), 300);
+    };
+  }
+
   toast(e) {
     const div = document.createElement('div');
     div.className = `toast toast-${e.type || 'info'}`;

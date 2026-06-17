@@ -427,6 +427,35 @@ body.mode-survival #dock { display: none; }   /* (re-affirm) survival hides the 
   border-radius: 9px; padding: 9px 18px; font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.15s; }
 .tut-next:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(110,168,255,0.4); }
 
+/* ---------- end screen (#8 fail-state / victory) ---------- */
+.endscreen { position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 30%, rgba(20,26,40,0.6), rgba(4,6,11,0.92));
+  backdrop-filter: blur(8px); opacity: 0; transition: opacity 0.4s ease; --end-hue: var(--accent); }
+.endscreen.show { opacity: 1; }
+.end-card { width: min(460px, 92vw); background: var(--panel-solid); border-radius: 20px;
+  border: 1px solid var(--end-hue); padding: 30px 30px 24px; text-align: center;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04), 0 0 60px -20px var(--end-hue);
+  transform: translateY(14px) scale(0.97); transition: transform 0.4s cubic-bezier(0.2,0.9,0.3,1); }
+.endscreen.show .end-card { transform: translateY(0) scale(1); }
+.end-ico { font-size: 46px; line-height: 1; margin-bottom: 8px; }
+.endscreen.lose .end-ico { filter: grayscale(0.3) brightness(0.95); }
+.end-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 10px;
+  background: linear-gradient(120deg, #fff, var(--end-hue)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.end-card p { font-size: 13.5px; color: #c4cddd; line-height: 1.6; margin-bottom: 18px; }
+.end-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 22px; }
+.end-stat { display: flex; flex-direction: column; gap: 2px; background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; text-align: left; }
+.end-stat:nth-child(5) { grid-column: 1 / -1; }
+.end-k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.end-v { font-size: 17px; font-weight: 800; color: var(--text); }
+.end-btns { display: flex; gap: 10px; justify-content: center; }
+.end-watch { background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+  border-radius: 10px; padding: 10px 18px; font-size: 13px; font-weight: 700; transition: all 0.15s; }
+.end-watch:hover { color: var(--text); border-color: rgba(255,255,255,0.25); }
+.end-restart { background: linear-gradient(120deg, var(--end-hue), #4a7fd0); color: #07101e; border: none;
+  border-radius: 10px; padding: 10px 22px; font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.15s; }
+.end-restart:hover { transform: translateY(-1px); box-shadow: 0 6px 20px -4px var(--end-hue); }
+
 /* ---------- found-mode banner (twin of the command banner) ---------- */
 #found-banner { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 30;
   background: rgba(240,200,105,0.95); color: #1a1405; font-weight: 700; font-size: 13px; letter-spacing: 0.3px;
